@@ -726,8 +726,8 @@ name = "kape"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "event-listener",
  "futures-lite",
+ "thiserror",
  "tracing",
 ]
 
@@ -780,6 +780,7 @@ dependencies = [
  "kape",
  "kape-testkit",
  "moka",
+ "thiserror",
 ]
 
 [[package]]
@@ -790,6 +791,7 @@ dependencies = [
  "kape",
  "kape-testkit",
  "sqlx",
+ "thiserror",
  "tokio",
 ]
 
@@ -801,6 +803,7 @@ dependencies = [
  "kape",
  "kape-testkit",
  "redis",
+ "thiserror",
  "tokio",
 ]
 

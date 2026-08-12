@@ -83,7 +83,7 @@ The implemented MVP covers:
 - per-backend read, write, backfill, error, and TTL policies;
 - remaining-TTL propagation when refilling earlier backends;
 - deterministic writes and invalidation with explicit partial failures;
-- `get_or_load` with a per-cache, per-key load queue;
+- `get_or_load` with explicit loader and write-failure policies;
 - dynamic per-backend TTL selection from the typed key and value;
 - ordered batch get/set/has/take with duplicate-key preservation;
 - scalar has/take convenience operations;

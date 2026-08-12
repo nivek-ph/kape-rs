@@ -1,23 +1,21 @@
 use std::{
     error::Error as StdError,
     fmt,
-    future::{Future, pending, poll_fn},
-    pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
-    task::Poll,
     time::Duration,
 };
 
 use async_trait::async_trait;
-use futures_lite::future::{block_on, yield_now, zip};
+use futures_lite::future::block_on;
+use kape::KapeError as Error;
 use kape::{
-    BackendCapability, BackendOptions, BackendTTLPolicy, BackfillFailurePolicy, BuildError, Cache,
-    CacheBackend, CacheEntry, CacheLookup, Error, IterationEntry, IterationFreshness,
-    IterationPage, LoadOptions, LoadWriteFailurePolicy, LoaderFailurePolicy, Lookup, Operation,
-    ReadFailurePolicy, RemainingTTL, ResolvedTTL, SetItem, TTL,
+    BackendOptions, BackendTTLPolicy, BackfillFailurePolicy, Cache, CacheBackend, CacheEntry,
+    CacheLookup, IterationEntry, IterationFreshness, IterationPage, KapeError, LoadOptions,
+    LoadWriteFailurePolicy, LoaderFailurePolicy, Lookup, Operation, ReadFailurePolicy,
+    RemainingTTL, ResolvedTTL, SetItem, TTL,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,9 +87,7 @@ struct BorrowedBackend;
 
 #[async_trait]
 impl<'data> CacheBackend<&'data str, &'data str> for BorrowedBackend {
-    type Error = TestError;
-
-    async fn get(&self, _key: &&'data str) -> Result<Lookup<&'data str>, Self::Error> {
+    async fn get(&self, _key: &&'data str) -> Result<Lookup<&'data str>, KapeError> {
         Ok(Lookup::Miss)
     }
 
@@ -100,12 +96,27 @@ impl<'data> CacheBackend<&'data str, &'data str> for BorrowedBackend {
         _key: &&'data str,
         _value: Arc<&'data str>,
         _ttl: ResolvedTTL,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), KapeError> {
         Ok(())
     }
 
-    async fn remove(&self, _key: &&'data str) -> Result<(), Self::Error> {
+    async fn remove(&self, _key: &&'data str) -> Result<(), KapeError> {
         Ok(())
+    }
+
+    async fn clear(&self) -> Result<(), KapeError> {
+        Ok(())
+    }
+
+    async fn iterate(
+        &self,
+        _cursor: Option<&[u8]>,
+        _limit: usize,
+    ) -> Result<IterationPage<&'data str, &'data str>, KapeError> {
+        Ok(IterationPage {
+            entries: Vec::new(),
+            next_cursor: None,
+        })
     }
 }
 
@@ -126,12 +137,10 @@ fn cache_accepts_non_static_key_and_value_types() {
 
 #[async_trait]
 impl CacheBackend<String, String> for TestBackend {
-    type Error = TestError;
-
-    async fn get(&self, _key: &String) -> Result<Lookup<String>, Self::Error> {
+    async fn get(&self, _key: &String) -> Result<Lookup<String>, KapeError> {
         self.record(Event::Get(self.name));
         if self.fail_get.load(Ordering::Relaxed) {
-            Err(TestError("get failed"))
+            Err(KapeError::backend(TestError("get failed")))
         } else {
             Ok(self.lookup.clone())
         }
@@ -142,30 +151,30 @@ impl CacheBackend<String, String> for TestBackend {
         _key: &String,
         _value: Arc<String>,
         ttl: ResolvedTTL,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), KapeError> {
         self.record(Event::Set(self.name, ttl));
         if self.fail_set.load(Ordering::Relaxed) {
-            Err(TestError("set failed"))
+            Err(KapeError::backend(TestError("set failed")))
         } else {
             Ok(())
         }
     }
 
-    async fn remove(&self, _key: &String) -> Result<(), Self::Error> {
+    async fn remove(&self, _key: &String) -> Result<(), KapeError> {
         self.record(Event::Remove(self.name));
         if self.fail_remove.load(Ordering::Relaxed) {
-            Err(TestError("remove failed"))
+            Err(KapeError::backend(TestError("remove failed")))
         } else {
             Ok(())
         }
     }
 
-    async fn clear(&self) -> Result<BackendCapability<()>, Self::Error> {
+    async fn clear(&self) -> Result<(), KapeError> {
         self.record(Event::Clear(self.name));
         if self.fail_remove.load(Ordering::Relaxed) {
-            Err(TestError("clear failed"))
+            Err(KapeError::backend(TestError("clear failed")))
         } else {
-            Ok(BackendCapability::Supported(()))
+            Ok(())
         }
     }
 
@@ -173,7 +182,7 @@ impl CacheBackend<String, String> for TestBackend {
         &self,
         _cursor: Option<&[u8]>,
         _limit: usize,
-    ) -> Result<BackendCapability<IterationPage<String, String>>, Self::Error> {
+    ) -> Result<IterationPage<String, String>, KapeError> {
         self.record(Event::Iterate(self.name));
         let entries = match &self.lookup {
             Lookup::Miss => Vec::new(),
@@ -188,16 +197,16 @@ impl CacheBackend<String, String> for TestBackend {
                 },
             }],
         };
-        Ok(BackendCapability::Supported(IterationPage {
+        Ok(IterationPage {
             entries,
             next_cursor: None,
-        }))
+        })
     }
 
-    async fn disconnect(&self) -> Result<(), Self::Error> {
+    async fn disconnect(&self) -> Result<(), KapeError> {
         self.record(Event::Disconnect(self.name));
         if self.fail_remove.load(Ordering::Relaxed) {
-            Err(TestError("disconnect failed"))
+            Err(KapeError::backend(TestError("disconnect failed")))
         } else {
             Ok(())
         }
@@ -208,9 +217,7 @@ struct ShortBatchBackend;
 
 #[async_trait]
 impl CacheBackend<String, String> for ShortBatchBackend {
-    type Error = TestError;
-
-    async fn get(&self, _key: &String) -> Result<Lookup<String>, Self::Error> {
+    async fn get(&self, _key: &String) -> Result<Lookup<String>, KapeError> {
         Ok(Lookup::Miss)
     }
 
@@ -219,15 +226,30 @@ impl CacheBackend<String, String> for ShortBatchBackend {
         _key: &String,
         _value: Arc<String>,
         _ttl: ResolvedTTL,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), KapeError> {
         Ok(())
     }
 
-    async fn remove(&self, _key: &String) -> Result<(), Self::Error> {
+    async fn remove(&self, _key: &String) -> Result<(), KapeError> {
         Ok(())
     }
 
-    async fn get_many(&self, _keys: &[&String]) -> Result<Vec<Lookup<String>>, Self::Error> {
+    async fn clear(&self) -> Result<(), KapeError> {
+        Ok(())
+    }
+
+    async fn iterate(
+        &self,
+        _cursor: Option<&[u8]>,
+        _limit: usize,
+    ) -> Result<IterationPage<String, String>, KapeError> {
+        Ok(IterationPage {
+            entries: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_many(&self, _keys: &[&String]) -> Result<Vec<Lookup<String>>, KapeError> {
         Ok(vec![Lookup::Miss])
     }
 }
@@ -379,6 +401,7 @@ fn can_propagate_backfill_failure() {
         Error::Backend(ref failure)
             if failure.backend.as_ref() == "first"
                 && failure.operation == Operation::Backfill
+                && failure.source.downcast_ref::<TestError>().is_some()
     ));
 }
 
@@ -507,10 +530,41 @@ fn loader_can_select_dynamic_ttl_from_the_loaded_value() {
         take_events(&events),
         [
             Event::Get("memory"),
-            Event::Get("memory"),
             Event::Set("memory", ResolvedTTL::After(Duration::from_secs(9))),
         ]
     );
+}
+
+#[test]
+fn get_or_load_stops_after_the_first_backend_hit() {
+    let events = events();
+    let cache = Cache::builder()
+        .backend(
+            "memory",
+            TestBackend::new(
+                "memory",
+                hit("hot", RemainingTTL::Never),
+                Arc::clone(&events),
+            ),
+        )
+        .backend(
+            "redis",
+            TestBackend::new("redis", Lookup::Miss, Arc::clone(&events)),
+        )
+        .backend(
+            "postgres",
+            TestBackend::new("postgres", Lookup::Miss, Arc::clone(&events)),
+        )
+        .build()
+        .expect("cache should build");
+
+    let value = block_on(cache.get_or_load(&"key".to_owned(), || async {
+        Err::<String, _>(TestError("loader should not run"))
+    }))
+    .expect("memory hit should be returned");
+
+    assert_eq!(value.as_str(), "hot");
+    assert_eq!(take_events(&events), [Event::Get("memory")]);
 }
 
 #[test]
@@ -834,7 +888,7 @@ fn clear_and_disconnect_run_in_reverse_order_and_aggregate_failures() {
 }
 
 #[test]
-fn named_iteration_is_typed_and_capability_errors_are_explicit() {
+fn named_iteration_is_typed_and_management_operations_are_required() {
     let events = events();
     let cache = Cache::builder()
         .backend(
@@ -845,7 +899,7 @@ fn named_iteration_is_typed_and_capability_errors_are_explicit() {
                 Arc::clone(&events),
             ),
         )
-        .backend("unsupported", ShortBatchBackend)
+        .backend("empty", ShortBatchBackend)
         .build()
         .expect("cache should build");
 
@@ -863,15 +917,10 @@ fn named_iteration_is_typed_and_capability_errors_are_explicit() {
         block_on(cache.scan("missing", None, 1)),
         Err(Error::BackendNotFound(name)) if name.as_ref() == "missing"
     ));
-    let unsupported = block_on(cache.clear_backend("unsupported"))
-        .expect_err("unsupported clear must stay visible");
-    assert!(matches!(
-        unsupported,
-        Error::Backend(ref failure)
-            if failure.operation == Operation::Clear
-                && failure.backend.as_ref() == "unsupported"
-                && failure.source.to_string().contains("does not support")
-    ));
+    let empty = block_on(cache.scan("empty", None, 1)).expect("required iteration should succeed");
+    assert!(empty.entries.is_empty());
+    assert!(empty.next_cursor.is_none());
+    block_on(cache.clear_backend("empty")).expect("required clear should succeed");
 }
 
 #[test]
@@ -926,37 +975,6 @@ fn read_policies_skip_or_serve_the_earliest_stale_candidate() {
 }
 
 #[test]
-fn coalesces_concurrent_loaders_per_cache_and_key() {
-    let events = events();
-    let cache = Cache::builder()
-        .backend(
-            "memory",
-            TestBackend::new("memory", Lookup::Miss, Arc::clone(&events)),
-        )
-        .build()
-        .expect("cache should build");
-    let loads = Arc::new(AtomicUsize::new(0));
-    let key = "key".to_owned();
-
-    let first_loads = Arc::clone(&loads);
-    let first = cache.get_or_load(&key, move || async move {
-        first_loads.fetch_add(1, Ordering::SeqCst);
-        yield_now().await;
-        Ok::<_, TestError>("loaded".to_owned())
-    });
-    let second_loads = Arc::clone(&loads);
-    let second = cache.get_or_load(&key, move || async move {
-        second_loads.fetch_add(1, Ordering::SeqCst);
-        Ok::<_, TestError>("wrong".to_owned())
-    });
-
-    let (first, second) = block_on(zip(first, second));
-    assert_eq!(first.expect("first should load").as_str(), "loaded");
-    assert_eq!(second.expect("second should wait").as_str(), "loaded");
-    assert_eq!(loads.load(Ordering::SeqCst), 1);
-}
-
-#[test]
 fn loader_can_serve_stale_and_write_failure_policy_is_explicit() {
     let stale_events = events();
     let stale_cache = Cache::builder()
@@ -994,91 +1012,6 @@ fn loader_can_serve_stale_and_write_failure_policy_is_explicit() {
 }
 
 #[test]
-fn cancelling_leader_notifies_waiter_and_dequeues_load() {
-    let events = events();
-    let cache = Cache::builder()
-        .backend(
-            "memory",
-            TestBackend::new("memory", Lookup::Miss, Arc::clone(&events)),
-        )
-        .build()
-        .expect("cache should build");
-    let key = "key".to_owned();
-    let mut leader = Box::pin(cache.get_or_load(&key, pending::<Result<String, TestError>>));
-
-    poll_once_pending(leader.as_mut());
-
-    let mut waiter =
-        Box::pin(cache.get_or_load(&key, || async { Ok::<_, TestError>("unused".to_owned()) }));
-    poll_once_pending(waiter.as_mut());
-
-    drop(leader);
-    assert!(matches!(block_on(waiter), Err(Error::LoadCancelled)));
-
-    let retry =
-        block_on(cache.get_or_load(&key, || async { Ok::<_, TestError>("retry".to_owned()) }))
-            .expect("cancelled load should be dequeued");
-    assert_eq!(retry.as_str(), "retry");
-}
-
-#[test]
-fn loader_panic_dequeues_load_for_retry() {
-    let events = events();
-    let cache = Cache::builder()
-        .backend(
-            "memory",
-            TestBackend::new("memory", Lookup::Miss, Arc::clone(&events)),
-        )
-        .build()
-        .expect("cache should build");
-    let key = "key".to_owned();
-
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        block_on(cache.get_or_load(&key, panicking_loader))
-    }));
-    assert!(panic.is_err());
-
-    let retry =
-        block_on(cache.get_or_load(&key, || async { Ok::<_, TestError>("retry".to_owned()) }))
-            .expect("panicked load should be dequeued");
-    assert_eq!(retry.as_str(), "retry");
-}
-
-#[test]
-fn load_queue_does_not_cross_cache_instances() {
-    let events = events();
-    let backend = TestBackend::new("memory", Lookup::Miss, Arc::clone(&events));
-    let first_cache = Cache::builder()
-        .backend("memory", backend.clone())
-        .build()
-        .expect("cache should build");
-    let second_cache = Cache::builder()
-        .backend("memory", backend)
-        .build()
-        .expect("cache should build");
-    let loads = Arc::new(AtomicUsize::new(0));
-    let key = "key".to_owned();
-
-    let first_loads = Arc::clone(&loads);
-    let first = first_cache.get_or_load(&key, move || async move {
-        first_loads.fetch_add(1, Ordering::SeqCst);
-        yield_now().await;
-        Ok::<_, TestError>("first".to_owned())
-    });
-    let second_loads = Arc::clone(&loads);
-    let second = second_cache.get_or_load(&key, move || async move {
-        second_loads.fetch_add(1, Ordering::SeqCst);
-        yield_now().await;
-        Ok::<_, TestError>("second".to_owned())
-    });
-
-    let (first, second) = block_on(zip(first, second));
-    assert_eq!(first.unwrap().as_str(), "first");
-    assert_eq!(second.unwrap().as_str(), "second");
-    assert_eq!(loads.load(Ordering::SeqCst), 2);
-}
-
-#[test]
 fn validates_names_and_allows_repeated_backend_implementations() {
     let events = events();
     let duplicate = Cache::builder()
@@ -1093,7 +1026,7 @@ fn validates_names_and_allows_repeated_backend_implementations() {
         .build();
     assert!(matches!(
         duplicate,
-        Err(BuildError::DuplicateBackendName(name)) if name == "same-name"
+        Err(KapeError::DuplicateBackendName(name)) if name == "same-name"
     ));
 
     let cache = Cache::builder()
@@ -1129,10 +1062,6 @@ fn stale(value: &str) -> Lookup<String> {
     ))
 }
 
-async fn panicking_loader() -> Result<String, TestError> {
-    panic!("loader panic");
-}
-
 fn events() -> Arc<Mutex<Vec<Event>>> {
     Arc::new(Mutex::new(Vec::new()))
 }
@@ -1145,14 +1074,4 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-fn poll_once_pending<F>(mut future: Pin<&mut F>)
-where
-    F: Future,
-{
-    block_on(poll_fn(|context| {
-        assert!(future.as_mut().poll(context).is_pending());
-        Poll::Ready(())
-    }));
 }

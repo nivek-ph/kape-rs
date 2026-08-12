@@ -19,6 +19,7 @@ rustls = ["redis/tokio-rustls-comp"]
 async-trait.workspace = true
 kape.workspace = true
 redis.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 kape-testkit = { path = "../kape-testkit" }

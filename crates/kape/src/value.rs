@@ -116,15 +116,6 @@ pub enum Lookup<V> {
     Stale(CacheEntry<V>),
 }
 
-/// Whether a backend implements an optional cache capability.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BackendCapability<T> {
-    /// The backend does not implement the capability.
-    Unsupported,
-    /// The backend implemented the capability and returned a value.
-    Supported(T),
-}
-
 /// Freshness of an entry returned by backend iteration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IterationFreshness {

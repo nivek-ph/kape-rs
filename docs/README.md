@@ -15,10 +15,10 @@ adapter types, or force a fixed primary/secondary model. A later fresh hit can
 refill eligible earlier backends, but the refill never restarts the source
 entry's full TTL.
 
-The core API retains the caller's `K` and `V` types. Concrete backend and error
-types are erased only inside the heterogeneous chain. Serialization remains an
-adapter concern, so the in-memory adapter can store `Arc<V>` directly while
-Redis and PostgreSQL use explicit codecs.
+The core interface retains the caller's `K` and `V` types. Only concrete backend
+types are erased inside the heterogeneous chain; every backend returns
+`KapeError`. Serialization remains an adapter concern, so the in-memory adapter
+can store `Arc<V>` directly while Redis and PostgreSQL use explicit codecs.
 
 ## Where to start
 

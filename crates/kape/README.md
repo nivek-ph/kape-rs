@@ -35,7 +35,7 @@ Core operations include:
 - deterministic `set` and reverse-order `remove` fan-out;
 - reverse-order `clear` and `disconnect`, plus `clear_backend`;
 - typed, cursor-based `scan` pages with TTL and freshness metadata;
-- `get_or_load` with a per-cache, per-key load queue;
+- `get_or_load` with explicit loader and write-failure policies;
 - dynamic per-backend TTL selection for explicit and loader writes;
 - per-backend participation, TTL, read-failure, and backfill-failure policies;
 - an optional `tracing` feature.
@@ -90,17 +90,17 @@ fresh existence without warming earlier backends. `take_many` reads without
 backfill and then removes in reverse backend order; it is not atomic across
 unrelated backend systems.
 
-`clear` is an optional backend capability. The chain attempts every
-write-enabled backend in reverse order and reports unsupported backends as
-named partial failures. `clear_backend(name)` targets one instance explicitly.
-Remote adapters must scope clear to their configured `Kape` namespace.
+Every backend implements `clear`. The chain attempts every write-enabled
+backend in reverse order and reports failures as named partial failures.
+`clear_backend(name)` targets one instance explicitly. Remote adapters must
+scope clear to their configured `Kape` namespace.
 
 Iteration always names one backend:
 
 ```rust,no_run
-use kape::{Cache, Error};
+use kape::{Cache, KapeError};
 
-async fn visit(cache: &Cache<String, String>) -> Result<(), Error> {
+async fn visit(cache: &Cache<String, String>) -> Result<(), KapeError> {
 let mut cursor = None;
 loop {
     let page = cache

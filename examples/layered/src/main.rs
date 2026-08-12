@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn scan_entries(cache: &Cache<String, String>, backend: &str) -> Result<(), kape::Error> {
+async fn scan_entries(cache: &Cache<String, String>, backend: &str) -> Result<(), kape::KapeError> {
     let mut cursor = None;
     loop {
         let page = cache.scan(backend, cursor.as_deref(), 100).await?;

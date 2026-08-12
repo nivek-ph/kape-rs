@@ -1,78 +1,45 @@
 use std::error::Error as StdError;
-use std::fmt;
+
+use kape::KapeError;
+use thiserror::Error;
 
 /// A `PostgreSQL` adapter failure.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PostgresBackendError<E> {
     /// Key or value encoding failed.
-    Codec(E),
+    #[error("PostgreSQL codec failed: {0}")]
+    Codec(#[source] E),
     /// `PostgreSQL` operation failed.
-    Sqlx(sqlx::Error),
+    #[error("PostgreSQL operation failed: {0}")]
+    Sqlx(#[from] sqlx::Error),
     /// A duration cannot be represented as signed milliseconds.
+    #[error("TTL exceeds PostgreSQL millisecond range")]
     TTLOverflow,
     /// `PostgreSQL` returned an invalid positive remaining TTL.
+    #[error("PostgreSQL returned invalid remaining TTL {0}")]
     InvalidRemainingTTL(i64),
     /// A table name was empty, unsafe, or contained more than schema and table.
+    #[error("invalid table name '{0}'")]
     InvalidTableName(String),
     /// The configured table does not exist or is not visible in this session.
+    #[error("PostgreSQL table '{0}' does not exist")]
     TableNotFound(String),
     /// A namespace length cannot be represented by the key frame.
+    #[error("PostgreSQL namespace is too long")]
     NamespaceTooLong,
     /// The iteration cursor does not belong to this namespace.
+    #[error("invalid PostgreSQL iteration cursor")]
     InvalidCursor,
     /// The requested page size cannot be represented by `PostgreSQL`.
+    #[error("PostgreSQL iteration limit is too large")]
     IterationLimitOverflow,
 }
 
-impl<E> fmt::Display for PostgresBackendError<E>
+impl<E> From<PostgresBackendError<E>> for KapeError
 where
-    E: fmt::Display,
+    E: StdError + Send + Sync + 'static,
 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Codec(error) => write!(formatter, "PostgreSQL codec failed: {error}"),
-            Self::Sqlx(error) => write!(formatter, "PostgreSQL operation failed: {error}"),
-            Self::TTLOverflow => formatter.write_str("TTL exceeds PostgreSQL millisecond range"),
-            Self::InvalidRemainingTTL(value) => {
-                write!(
-                    formatter,
-                    "PostgreSQL returned invalid remaining TTL {value}"
-                )
-            }
-            Self::InvalidTableName(name) => write!(formatter, "invalid table name '{name}'"),
-            Self::TableNotFound(name) => {
-                write!(formatter, "PostgreSQL table '{name}' does not exist")
-            }
-            Self::NamespaceTooLong => formatter.write_str("PostgreSQL namespace is too long"),
-            Self::InvalidCursor => formatter.write_str("invalid PostgreSQL iteration cursor"),
-            Self::IterationLimitOverflow => {
-                formatter.write_str("PostgreSQL iteration limit is too large")
-            }
-        }
-    }
-}
-
-impl<E> StdError for PostgresBackendError<E>
-where
-    E: StdError + 'static,
-{
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Codec(error) => Some(error),
-            Self::Sqlx(error) => Some(error),
-            Self::TTLOverflow
-            | Self::InvalidRemainingTTL(_)
-            | Self::InvalidTableName(_)
-            | Self::TableNotFound(_)
-            | Self::NamespaceTooLong
-            | Self::InvalidCursor
-            | Self::IterationLimitOverflow => None,
-        }
-    }
-}
-
-impl<E> From<sqlx::Error> for PostgresBackendError<E> {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Sqlx(error)
+    fn from(error: PostgresBackendError<E>) -> Self {
+        Self::backend(error)
     }
 }

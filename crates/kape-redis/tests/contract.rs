@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use kape::{BackendCapability, CacheBackend, Lookup, ResolvedTTL};
+use kape::{CacheBackend, Lookup, ResolvedTTL};
 use kape_redis::{RedisBackend, StringCodec};
 use kape_testkit::{
     assert_backend_contract, assert_batch_contract, assert_expiring_contract,
@@ -45,10 +45,7 @@ async fn satisfies_backend_contract() {
         )
         .await
         .expect("protected namespace write failed");
-    assert!(matches!(
-        backend.clear().await.expect("namespace clear failed"),
-        BackendCapability::Supported(())
-    ));
+    backend.clear().await.expect("namespace clear failed");
     assert!(matches!(
         protected
             .get(&"protected".to_owned())

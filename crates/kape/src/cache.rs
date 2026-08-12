@@ -1,32 +1,27 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     error::Error as StdError,
     fmt,
-    hash::Hash,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use event_listener::Event;
-
 use crate::{
-    BackendCapability, BackendFailure, BackendOptions, BackendSetItem, BackfillFailurePolicy,
-    BuildError, CacheBackend, CacheEntry, Error, IterationPage, LoadOptions,
-    LoadWriteFailurePolicy, LoaderFailurePolicy, Lookup, Operation, ReadFailurePolicy,
-    RemainingTTL, SetItem, SharedError, TTL, TTLContext, UnsupportedCapability,
-    backend::{BackendAdapter, ErasedBackend},
+    BackendFailure, BackendOptions, BackendSetItem, BackfillFailurePolicy, CacheBackend,
+    CacheEntry, IterationPage, KapeError as Error, LoadOptions, LoadWriteFailurePolicy,
+    LoaderFailurePolicy, Lookup, Operation, ReadFailurePolicy, RemainingTTL, SetItem, TTL,
+    TTLContext,
 };
 
 struct CacheLayer<K, V> {
     name: Arc<str>,
-    backend: Arc<dyn ErasedBackend<K, V>>,
+    backend: Arc<dyn CacheBackend<K, V>>,
     options: BackendOptions,
 }
 
 struct CacheInner<K, V> {
     layers: Vec<CacheLayer<K, V>>,
     backend_names: Box<[Arc<str>]>,
-    load_queue: Mutex<HashMap<K, Weak<LoadState<V>>>>,
 }
 
 /// The result of querying the full backend chain.
@@ -115,9 +110,8 @@ where
 
     /// Clears every write-enabled backend in reverse configured order.
     ///
-    /// All backends are attempted. Unsupported capabilities and backend errors
-    /// are returned together as [`Error::PartialFailure`]. Successful clears
-    /// are not rolled back.
+    /// All backends are attempted. Backend errors are returned together as
+    /// [`Error::PartialFailure`]. Successful clears are not rolled back.
     ///
     /// # Errors
     ///
@@ -133,18 +127,8 @@ where
             any_write = true;
             let started = Instant::now();
             match layer.backend.clear().await {
-                Ok(BackendCapability::Supported(())) => {
+                Ok(()) => {
                     observe(layer, index, Operation::Clear, "success", started.elapsed());
-                }
-                Ok(BackendCapability::Unsupported) => {
-                    observe(
-                        layer,
-                        index,
-                        Operation::Clear,
-                        "unsupported",
-                        started.elapsed(),
-                    );
-                    failures.push(unsupported_failure(Operation::Clear, layer));
                 }
                 Err(source) => {
                     observe(layer, index, Operation::Clear, "error", started.elapsed());
@@ -159,25 +143,15 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a named backend failure when clear is unsupported or fails, or
+    /// Returns a named backend failure when clear fails, or
     /// [`Error::BackendNotFound`] when `backend` is not configured.
     pub async fn clear_backend(&self, backend: &str) -> Result<(), Error> {
         let (index, layer) = self.find_layer(backend)?;
         let started = Instant::now();
         match layer.backend.clear().await {
-            Ok(BackendCapability::Supported(())) => {
+            Ok(()) => {
                 observe(layer, index, Operation::Clear, "success", started.elapsed());
                 Ok(())
-            }
-            Ok(BackendCapability::Unsupported) => {
-                observe(
-                    layer,
-                    index,
-                    Operation::Clear,
-                    "unsupported",
-                    started.elapsed(),
-                );
-                Err(Error::Backend(unsupported_failure(Operation::Clear, layer)))
             }
             Err(source) => {
                 observe(layer, index, Operation::Clear, "error", started.elapsed());
@@ -194,7 +168,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a named backend failure when iteration is unsupported or fails,
+    /// Returns a named backend failure when iteration fails,
     /// [`Error::BackendNotFound`] for an unknown name, or
     /// [`Error::InvalidIterationLimit`] when `limit` is zero.
     pub async fn scan(
@@ -209,7 +183,7 @@ where
         let (index, layer) = self.find_layer(backend)?;
         let started = Instant::now();
         match layer.backend.iterate(cursor, limit).await {
-            Ok(BackendCapability::Supported(page)) => {
+            Ok(page) => {
                 observe(
                     layer,
                     index,
@@ -218,19 +192,6 @@ where
                     started.elapsed(),
                 );
                 Ok(page)
-            }
-            Ok(BackendCapability::Unsupported) => {
-                observe(
-                    layer,
-                    index,
-                    Operation::Iterate,
-                    "unsupported",
-                    started.elapsed(),
-                );
-                Err(Error::Backend(unsupported_failure(
-                    Operation::Iterate,
-                    layer,
-                )))
             }
             Err(source) => {
                 observe(layer, index, Operation::Iterate, "error", started.elapsed());
@@ -996,19 +957,12 @@ where
         }
         Ok(failures)
     }
-}
-
-impl<K, V> Cache<K, V>
-where
-    K: Clone + Eq + Hash + Send + Sync,
-    V: Send + Sync,
-{
     /// Gets a value or computes and caches it with default load policies.
     ///
     /// # Errors
     ///
-    /// Returns lookup, loader, cache write, or cancellation failures according
-    /// to the default [`LoadOptions`].
+    /// Returns lookup, loader, or cache write failures according to the default
+    /// [`LoadOptions`].
     pub async fn get_or_load<F, Fut, E>(&self, key: &K, loader: F) -> Result<Arc<V>, Error>
     where
         F: FnOnce() -> Fut,
@@ -1023,8 +977,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns lookup, loader, cache write, or cancellation failures according
-    /// to `options`.
+    /// Returns lookup, loader, or cache write failures according to `options`.
     pub async fn get_or_load_with<F, Fut, E>(
         &self,
         key: &K,
@@ -1043,13 +996,12 @@ where
     ///
     /// The selector has the same semantics as [`Self::set_with_ttl`]. Returning
     /// `None` uses [`LoadOptions::ttl`] as the fallback for that backend.
-    /// Only the load leader that successfully produces a value evaluates
-    /// the selector and writes the result.
+    /// The selector is evaluated only after the loader successfully produces a
+    /// value and before that value is written.
     ///
     /// # Errors
     ///
-    /// Returns lookup, loader, cache write, or cancellation failures according
-    /// to `options`.
+    /// Returns lookup, loader, or cache write failures according to `options`.
     pub async fn get_or_load_with_ttl<F, Fut, E, T>(
         &self,
         key: &K,
@@ -1080,27 +1032,11 @@ where
         E: StdError + Send + Sync + 'static,
         T: for<'a> Fn(TTLContext<'a, K, V>) -> Option<TTL>,
     {
-        let first_scan = self.lookup_internal(key).await?;
-        if let Some(value) = first_scan.lookup.into_value() {
+        let scan = self.lookup_internal(key).await?;
+        if let Some(value) = scan.lookup.into_value() {
             return Ok(value);
         }
-        let first_stale = first_scan.stale;
-
-        let queued = self.enqueue(key);
-        let EnqueuedLoad::Leader(guard) = queued else {
-            observe_load_queue("waiter_enqueued");
-            return queued.wait().await;
-        };
-        observe_load_queue("leader_enqueued");
-
-        let second_scan = match self.lookup_internal(key).await {
-            Ok(scan) => scan,
-            Err(error) => return guard.publish(Err(error)),
-        };
-        if let Some(value) = second_scan.lookup.into_value() {
-            return guard.publish(Ok(value));
-        }
-        let stale = first_stale.or(second_scan.stale);
+        let stale = scan.stale;
 
         let value = match loader().await {
             Ok(value) => Arc::new(value),
@@ -1108,11 +1044,11 @@ where
                 if options.loader_failure == LoaderFailurePolicy::ServeStale
                     && let Some(stale) = stale
                 {
-                    observe_load_queue("loader_error_serve_stale");
-                    return guard.publish(Ok(stale.value));
+                    observe_load("loader_error_serve_stale");
+                    return Ok(stale.value);
                 }
-                observe_load_queue("loader_error");
-                return guard.publish(Err(Error::loader(error)));
+                observe_load("loader_error");
+                return Err(Error::loader(error));
             }
         };
 
@@ -1121,32 +1057,12 @@ where
             .await
         {
             match options.write_failure {
-                LoadWriteFailurePolicy::Propagate => {
-                    return guard.publish(Err(error));
-                }
-                LoadWriteFailurePolicy::ReturnValue => {
-                    observe_load_queue("write_error_return_value");
-                }
+                LoadWriteFailurePolicy::Propagate => return Err(error),
+                LoadWriteFailurePolicy::ReturnValue => observe_load("write_error_return_value"),
             }
         }
 
-        guard.publish(Ok(value))
-    }
-
-    fn enqueue(&self, key: &K) -> EnqueuedLoad<K, V> {
-        let mut queue = lock(&self.inner.load_queue);
-        if let Some(state) = queue.get(key).and_then(Weak::upgrade) {
-            return EnqueuedLoad::Waiter(state);
-        }
-
-        let state = Arc::new(LoadState::new());
-        queue.insert(key.clone(), Arc::downgrade(&state));
-        EnqueuedLoad::Leader(LoadGuard {
-            inner: Arc::clone(&self.inner),
-            key: key.clone(),
-            state,
-            completed: false,
-        })
+        Ok(value)
     }
 }
 
@@ -1188,7 +1104,7 @@ where
     {
         self.layers.push(CacheLayer {
             name: name.into(),
-            backend: Arc::new(BackendAdapter(backend)),
+            backend: Arc::new(backend),
             options,
         });
         self
@@ -1198,20 +1114,20 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`BuildError`] when the chain is empty or contains an empty or
+    /// Returns [`crate::KapeError`] when the chain is empty or contains an empty or
     /// duplicate backend name.
-    pub fn build(self) -> Result<Cache<K, V>, BuildError> {
+    pub fn build(self) -> Result<Cache<K, V>, Error> {
         if self.layers.is_empty() {
-            return Err(BuildError::NoBackends);
+            return Err(Error::NoBackends);
         }
 
         let mut seen_names = HashSet::with_capacity(self.layers.len());
         for layer in &self.layers {
             if layer.name.trim().is_empty() {
-                return Err(BuildError::EmptyBackendName);
+                return Err(Error::EmptyBackendName);
             }
             if !seen_names.insert(layer.name.as_ref()) {
-                return Err(BuildError::DuplicateBackendName(layer.name.to_string()));
+                return Err(Error::DuplicateBackendName(layer.name.to_string()));
             }
         }
 
@@ -1225,7 +1141,6 @@ where
             inner: Arc::new(CacheInner {
                 layers: self.layers,
                 backend_names,
-                load_queue: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -1270,117 +1185,12 @@ struct StaleCandidate<V> {
     remaining_ttl: RemainingTTL,
 }
 
-struct LoadState<V> {
-    state: Mutex<Option<Result<Arc<V>, Error>>>,
-    changed: Event,
-}
-
-impl<V> LoadState<V> {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(None),
-            changed: Event::new(),
-        }
-    }
-
-    fn complete(&self, result: Result<Arc<V>, Error>) {
-        let mut state = lock(&self.state);
-        if state.is_none() {
-            *state = Some(result);
-            drop(state);
-            self.changed.notify(usize::MAX);
-        }
-    }
-
-    async fn wait(&self) -> Result<Arc<V>, Error> {
-        loop {
-            let listener = self.changed.listen();
-            if let Some(result) = lock(&self.state).clone() {
-                return result;
-            }
-            listener.await;
-        }
-    }
-}
-
-enum EnqueuedLoad<K: Eq + Hash, V> {
-    Leader(LoadGuard<K, V>),
-    Waiter(Arc<LoadState<V>>),
-}
-
-impl<K, V> EnqueuedLoad<K, V>
-where
-    K: Eq + Hash,
-{
-    async fn wait(self) -> Result<Arc<V>, Error> {
-        match self {
-            Self::Waiter(state) => state.wait().await,
-            Self::Leader(_) => unreachable!("leader cannot wait as a follower"),
-        }
-    }
-}
-
-struct LoadGuard<K: Eq + Hash, V> {
-    inner: Arc<CacheInner<K, V>>,
-    key: K,
-    state: Arc<LoadState<V>>,
-    completed: bool,
-}
-
-impl<K, V> LoadGuard<K, V>
-where
-    K: Eq + Hash,
-{
-    fn publish(mut self, result: Result<Arc<V>, Error>) -> Result<Arc<V>, Error> {
-        self.state.complete(result.clone());
-        self.dequeue();
-        self.completed = true;
-        result
-    }
-
-    fn dequeue(&self) {
-        let mut queue = lock(&self.inner.load_queue);
-        let registered = queue
-            .get(&self.key)
-            .and_then(Weak::upgrade)
-            .is_some_and(|state| Arc::ptr_eq(&state, &self.state));
-        if registered {
-            queue.remove(&self.key);
-        }
-    }
-}
-
-impl<K, V> Drop for LoadGuard<K, V>
-where
-    K: Eq + Hash,
-{
-    fn drop(&mut self) {
-        if !self.completed {
-            self.state.complete(Err(Error::LoadCancelled));
-            self.dequeue();
-            observe_load_queue("leader_cancelled");
-        }
-    }
-}
-
-fn failure<K, V>(
-    operation: Operation,
-    layer: &CacheLayer<K, V>,
-    source: SharedError,
-) -> BackendFailure {
+fn failure<K, V>(operation: Operation, layer: &CacheLayer<K, V>, source: Error) -> BackendFailure {
     BackendFailure {
         operation,
         backend: Arc::clone(&layer.name),
-        source,
+        source: source.into_source(),
     }
-}
-
-fn unsupported_failure<K, V>(operation: Operation, layer: &CacheLayer<K, V>) -> BackendFailure {
-    failure(
-        operation,
-        layer,
-        Arc::new(UnsupportedCapability { operation }),
-    )
 }
 
 #[derive(Debug)]
@@ -1413,7 +1223,7 @@ fn validate_batch_len<K, V>(
         Err(Error::Backend(failure(
             operation,
             layer,
-            Arc::new(BatchResultLengthError { expected, actual }),
+            Error::backend(BatchResultLengthError { expected, actual }),
         )))
     }
 }
@@ -1462,12 +1272,6 @@ fn fanout_result(
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 #[cfg(feature = "tracing")]
 fn observe<K, V>(
     layer: &CacheLayer<K, V>,
@@ -1498,9 +1302,9 @@ fn observe<K, V>(
 }
 
 #[cfg(feature = "tracing")]
-fn observe_load_queue(outcome: &'static str) {
-    tracing::event!(target: "kape", tracing::Level::DEBUG, operation = "load_queue", outcome);
+fn observe_load(outcome: &'static str) {
+    tracing::event!(target: "kape", tracing::Level::DEBUG, operation = "load", outcome);
 }
 
 #[cfg(not(feature = "tracing"))]
-fn observe_load_queue(_outcome: &'static str) {}
+fn observe_load(_outcome: &'static str) {}

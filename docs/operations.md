@@ -23,15 +23,14 @@ default scalar fallbacks with native Redis pipelines or PostgreSQL batch SQL.
 Duplicate writes retain their ordinary sequential meaning. Remote adapters
 preserve that meaning even when they optimize the transport.
 
-## Load queue
+## Loading
 
-`get_or_load` and its policy/TTL variants enqueue concurrent misses per cache
-and key. One leader runs the loader while queued waiters receive the same
-result. Completion, cancellation, or panic dequeues the load so later calls can
-retry.
+`get_or_load` and its policy/TTL variants first perform the ordinary ordered
+lookup. If no backend produces a usable value, that invocation runs its loader
+once and writes a successful result through the ordinary ordered write path.
 
-The load queue is runtime-independent and scoped to one `Cache` instance. It is
-not distributed locking across processes.
+Each invocation is independent. Kape does not coalesce concurrent misses or
+spawn the loader in a background task.
 
 ## Management operations
 

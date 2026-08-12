@@ -20,7 +20,7 @@ use std::{sync::Arc, time::Duration};
 use kape::{Cache, TTL};
 use kape_memory::MemoryBackend;
 
-# async fn example() -> Result<(), kape::Error> {
+# async fn example() -> Result<(), kape::KapeError> {
 let hot = MemoryBackend::<String, String>::new(10_000);
 let shared = MemoryBackend::<String, String>::new(100_000);
 

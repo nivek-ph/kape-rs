@@ -2,10 +2,7 @@ use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use crate::{RedisBackendError, RedisCodec};
 use async_trait::async_trait;
-use kape::{
-    BackendCapability, BackendSetItem, CacheBackend, CacheEntry, IterationEntry,
-    IterationFreshness, IterationPage, Lookup, RemainingTTL, ResolvedTTL,
-};
+use kape::{BackendSetItem, CacheBackend, IterationPage, KapeError, Lookup, ResolvedTTL};
 use redis::aio::ConnectionManager;
 
 /// A `Kape` backend using `Redis`.
@@ -40,9 +37,11 @@ where
     ///
     /// Returns a `Redis` error when the URL is invalid or the initial
     /// connection cannot be established.
-    pub async fn connect(url: &str, codec: C) -> Result<Self, RedisBackendError<C::Error>> {
-        let client = redis::Client::open(url)?;
-        let connection = ConnectionManager::new(client).await?;
+    pub async fn connect(url: &str, codec: C) -> Result<Self, KapeError> {
+        let client = redis::Client::open(url).map_err(RedisBackendError::<C::Error>::Redis)?;
+        let connection = ConnectionManager::new(client)
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         Ok(Self::from_connection(connection, codec))
     }
 
@@ -86,39 +85,20 @@ where
     V: Send + Sync,
     C: RedisCodec<K, V>,
 {
-    type Error = RedisBackendError<C::Error>;
-
-    async fn get(&self, key: &K) -> Result<Lookup<V>, Self::Error> {
+    async fn get(&self, key: &K) -> Result<Lookup<V>, KapeError> {
         let key = self.encode_key(key)?;
         let mut connection = self.connection.clone();
         let mut pipeline = redis::pipe();
         pipeline.atomic().cmd("GET").arg(&key).cmd("PTTL").arg(&key);
-        let (bytes, pttl): (Option<Vec<u8>>, i64) = pipeline.query_async(&mut connection).await?;
+        let (bytes, pttl): (Option<Vec<u8>>, i64) = pipeline
+            .query_async(&mut connection)
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
 
-        let Some(bytes) = bytes else {
-            return Ok(Lookup::Miss);
-        };
-        if pttl == -2 {
-            return Ok(Lookup::Miss);
-        }
-        let value = Arc::new(
-            self.codec
-                .decode_value(&bytes)
-                .map_err(RedisBackendError::Codec)?,
-        );
-        let remaining_ttl = match pttl {
-            -1 => RemainingTTL::Never,
-            value if value >= 0 => {
-                let millis =
-                    u64::try_from(value).map_err(|_| RedisBackendError::InvalidPttl(value))?;
-                RemainingTTL::Known(Duration::from_millis(millis))
-            }
-            value => return Err(RedisBackendError::InvalidPttl(value)),
-        };
-        Ok(Lookup::Hit(CacheEntry::new(value, remaining_ttl)))
+        crate::lookup::decode_lookup(&self.codec, bytes.as_deref(), pttl).map_err(Into::into)
     }
 
-    async fn set(&self, key: &K, value: Arc<V>, ttl: ResolvedTTL) -> Result<(), Self::Error> {
+    async fn set(&self, key: &K, value: Arc<V>, ttl: ResolvedTTL) -> Result<(), KapeError> {
         let key = self.encode_key(key)?;
         let bytes = self
             .codec
@@ -128,23 +108,29 @@ where
         let mut command = redis::cmd("SET");
         command.arg(key).arg(bytes);
         if let ResolvedTTL::After(duration) = ttl {
-            command.arg("PX").arg(duration_millis(duration)?);
+            command
+                .arg("PX")
+                .arg(duration_millis::<C::Error>(duration)?);
         }
-        command.query_async::<()>(&mut connection).await?;
+        command
+            .query_async::<()>(&mut connection)
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         Ok(())
     }
 
-    async fn remove(&self, key: &K) -> Result<(), Self::Error> {
+    async fn remove(&self, key: &K) -> Result<(), KapeError> {
         let key = self.encode_key(key)?;
         let mut connection = self.connection.clone();
         redis::cmd("DEL")
             .arg(key)
             .query_async::<u64>(&mut connection)
-            .await?;
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Lookup<V>>, Self::Error> {
+    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Lookup<V>>, KapeError> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -160,20 +146,24 @@ where
         let mut connection = self.connection.clone();
         let responses = pipeline
             .query_async::<Vec<redis::Value>>(&mut connection)
-            .await?;
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         if responses.len() != keys.len() * 2 {
-            return Err(RedisBackendError::InvalidBatchResponse(
+            return Err(RedisBackendError::<C::Error>::InvalidBatchResponse(
                 "one GET and PTTL response per key",
-            ));
+            )
+            .into());
         }
 
         responses
             .chunks_exact(2)
-            .map(|pair| self.decode_lookup_pair(&pair[0], &pair[1]))
+            .map(|pair| {
+                crate::lookup::decode_pair(&self.codec, &pair[0], &pair[1]).map_err(Into::into)
+            })
             .collect()
     }
 
-    async fn set_many(&self, items: &[BackendSetItem<'_, K, V>]) -> Result<(), Self::Error> {
+    async fn set_many(&self, items: &[BackendSetItem<'_, K, V>]) -> Result<(), KapeError> {
         if items.is_empty() {
             return Ok(());
         }
@@ -194,15 +184,20 @@ where
         for (key, value, ttl) in encoded {
             pipeline.cmd("SET").arg(key).arg(value);
             if let ResolvedTTL::After(duration) = ttl {
-                pipeline.arg("PX").arg(duration_millis(duration)?);
+                pipeline
+                    .arg("PX")
+                    .arg(duration_millis::<C::Error>(duration)?);
             }
         }
         let mut connection = self.connection.clone();
-        pipeline.query_async::<()>(&mut connection).await?;
+        pipeline
+            .query_async::<()>(&mut connection)
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         Ok(())
     }
 
-    async fn has_many(&self, keys: &[&K]) -> Result<Vec<bool>, Self::Error> {
+    async fn has_many(&self, keys: &[&K]) -> Result<Vec<bool>, KapeError> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -217,24 +212,27 @@ where
         let mut connection = self.connection.clone();
         let responses = pipeline
             .query_async::<Vec<redis::Value>>(&mut connection)
-            .await?;
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         if responses.len() != keys.len() {
-            return Err(RedisBackendError::InvalidBatchResponse(
+            return Err(RedisBackendError::<C::Error>::InvalidBatchResponse(
                 "one EXISTS response per key",
-            ));
+            )
+            .into());
         }
         responses
             .into_iter()
             .map(|response| match response {
                 redis::Value::Int(value) => Ok(value != 0),
-                _ => Err(RedisBackendError::InvalidBatchResponse(
+                _ => Err(RedisBackendError::<C::Error>::InvalidBatchResponse(
                     "integer EXISTS responses",
-                )),
+                )
+                .into()),
             })
             .collect()
     }
 
-    async fn remove_many(&self, keys: &[&K]) -> Result<(), Self::Error> {
+    async fn remove_many(&self, keys: &[&K]) -> Result<(), KapeError> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -246,12 +244,13 @@ where
         redis::cmd("DEL")
             .arg(keys)
             .query_async::<u64>(&mut connection)
-            .await?;
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
         Ok(())
     }
 
-    async fn clear(&self) -> Result<BackendCapability<()>, Self::Error> {
-        let pattern = namespace_pattern(&self.namespace)?;
+    async fn clear(&self) -> Result<(), KapeError> {
+        let pattern = namespace_pattern::<C::Error>(&self.namespace)?;
         let mut connection = self.connection.clone();
         loop {
             let mut cursor = 0_u64;
@@ -264,12 +263,14 @@ where
                     .arg("COUNT")
                     .arg(256_u64)
                     .query_async(&mut connection)
-                    .await?;
+                    .await
+                    .map_err(RedisBackendError::<C::Error>::Redis)?;
                 if !keys.is_empty() {
                     deleted += redis::cmd("DEL")
                         .arg(keys)
                         .query_async::<u64>(&mut connection)
-                        .await?;
+                        .await
+                        .map_err(RedisBackendError::<C::Error>::Redis)?;
                 }
                 cursor = next;
                 if cursor == 0 {
@@ -280,17 +281,18 @@ where
                 break;
             }
         }
-        Ok(BackendCapability::Supported(()))
+        Ok(())
     }
 
     async fn iterate(
         &self,
         cursor: Option<&[u8]>,
         limit: usize,
-    ) -> Result<BackendCapability<IterationPage<K, V>>, Self::Error> {
-        let cursor = decode_cursor(cursor)?;
-        let prefix = frame_key(&self.namespace, &[]).ok_or(RedisBackendError::NamespaceTooLong)?;
-        let pattern = namespace_pattern(&self.namespace)?;
+    ) -> Result<IterationPage<K, V>, KapeError> {
+        let cursor = decode_cursor::<C::Error>(cursor)?;
+        let prefix = frame_key(&self.namespace, &[])
+            .ok_or(RedisBackendError::<C::Error>::NamespaceTooLong)?;
+        let pattern = namespace_pattern::<C::Error>(&self.namespace)?;
         let mut connection = self.connection.clone();
         let (next, framed_keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
             .arg(cursor)
@@ -299,7 +301,8 @@ where
             .arg("COUNT")
             .arg(limit)
             .query_async(&mut connection)
-            .await?;
+            .await
+            .map_err(RedisBackendError::<C::Error>::Redis)?;
 
         let mut pipeline = redis::pipe();
         pipeline.atomic();
@@ -311,84 +314,30 @@ where
         } else {
             pipeline
                 .query_async::<Vec<redis::Value>>(&mut connection)
-                .await?
+                .await
+                .map_err(RedisBackendError::<C::Error>::Redis)?
         };
         if responses.len() != framed_keys.len() * 2 {
-            return Err(RedisBackendError::InvalidBatchResponse(
+            return Err(RedisBackendError::<C::Error>::InvalidBatchResponse(
                 "one GET and PTTL response per scanned key",
-            ));
+            )
+            .into());
         }
 
         let mut entries = Vec::with_capacity(framed_keys.len());
         for (key, pair) in framed_keys.iter().zip(responses.chunks_exact(2)) {
-            let lookup = self.decode_lookup_pair(&pair[0], &pair[1])?;
-            let (entry, freshness) = match lookup {
-                Lookup::Miss => continue,
-                Lookup::Hit(entry) => (entry, IterationFreshness::Fresh),
-                Lookup::Stale(entry) => (entry, IterationFreshness::Stale),
-            };
+            let lookup = crate::lookup::decode_pair(&self.codec, &pair[0], &pair[1])?;
             let encoded_key = key
                 .strip_prefix(prefix.as_slice())
-                .ok_or(RedisBackendError::InvalidKeyFrame)?;
-            let key = self
-                .codec
-                .decode_key(encoded_key)
-                .map_err(RedisBackendError::Codec)?;
-            entries.push(IterationEntry {
-                key,
-                value: entry.value,
-                remaining_ttl: entry.remaining_ttl,
-                freshness,
-            });
+                .ok_or(RedisBackendError::<C::Error>::InvalidKeyFrame)?;
+            if let Some(entry) = crate::lookup::iteration_entry(&self.codec, encoded_key, lookup)? {
+                entries.push(entry);
+            }
         }
-        Ok(BackendCapability::Supported(IterationPage {
+        Ok(IterationPage {
             entries,
             next_cursor: (next != 0).then(|| next.to_be_bytes().to_vec()),
-        }))
-    }
-}
-
-impl<K, V, C> RedisBackend<K, V, C>
-where
-    C: RedisCodec<K, V>,
-{
-    fn decode_lookup_pair(
-        &self,
-        value: &redis::Value,
-        pttl: &redis::Value,
-    ) -> Result<Lookup<V>, RedisBackendError<C::Error>> {
-        let bytes = match value {
-            redis::Value::Nil => return Ok(Lookup::Miss),
-            redis::Value::BulkString(bytes) => bytes,
-            _ => {
-                return Err(RedisBackendError::InvalidBatchResponse(
-                    "bulk-string or nil GET responses",
-                ));
-            }
-        };
-        let redis::Value::Int(pttl) = pttl else {
-            return Err(RedisBackendError::InvalidBatchResponse(
-                "integer PTTL responses",
-            ));
-        };
-        if *pttl == -2 {
-            return Ok(Lookup::Miss);
-        }
-        let remaining_ttl = match *pttl {
-            -1 => RemainingTTL::Never,
-            value if value >= 0 => {
-                let millis =
-                    u64::try_from(value).map_err(|_| RedisBackendError::InvalidPttl(value))?;
-                RemainingTTL::Known(Duration::from_millis(millis))
-            }
-            value => return Err(RedisBackendError::InvalidPttl(value)),
-        };
-        let value = Arc::new(
-            self.codec
-                .decode_value(bytes)
-                .map_err(RedisBackendError::Codec)?,
-        );
-        Ok(Lookup::Hit(CacheEntry::new(value, remaining_ttl)))
+        })
     }
 }
 

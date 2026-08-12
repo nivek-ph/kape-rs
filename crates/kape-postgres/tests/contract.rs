@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use kape::{BackendCapability, CacheBackend, Lookup, ResolvedTTL};
-use kape_postgres::{PostgresBackend, StringCodec};
+use kape::{CacheBackend, KapeError, Lookup, ResolvedTTL};
+use kape_postgres::{PostgresBackend, PostgresBackendError, StringCodec, StringCodecError};
 use kape_testkit::{
     assert_backend_contract, assert_batch_contract, assert_expiring_contract,
     assert_management_contract,
@@ -35,9 +35,12 @@ async fn satisfies_backend_contract() {
     let missing = PostgresBackend::<String, String, _>::new(backend.pool().clone(), StringCodec)
         .with_table(&missing_table)
         .expect("generated table name should be valid");
+    let Err(KapeError::BackendSource { source }) = missing.check_table().await else {
+        panic!("missing table should return a backend source error");
+    };
     assert!(matches!(
-        missing.check_table().await,
-        Err(kape_postgres::PostgresBackendError::TableNotFound(_))
+        source.downcast_ref::<PostgresBackendError<StringCodecError>>(),
+        Some(PostgresBackendError::TableNotFound(_))
     ));
 
     assert_backend_contract(&backend, &"round-trip".to_owned(), String::new()).await;
@@ -72,10 +75,7 @@ async fn satisfies_backend_contract() {
         )
         .await
         .expect("protected namespace write failed");
-    assert!(matches!(
-        backend.clear().await.expect("namespace clear failed"),
-        BackendCapability::Supported(())
-    ));
+    backend.clear().await.expect("namespace clear failed");
     assert!(matches!(
         protected
             .get(&"protected".to_owned())

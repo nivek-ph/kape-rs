@@ -16,7 +16,7 @@ tracing = ["dep:tracing"]
 
 [dependencies]
 async-trait.workspace = true
-event-listener.workspace = true
+thiserror.workspace = true
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]

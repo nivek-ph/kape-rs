@@ -2,10 +2,7 @@
 
 use std::{fmt::Debug, sync::Arc, time::Duration};
 
-use kape::{
-    BackendCapability, BackendSetItem, CacheBackend, IterationFreshness, Lookup, RemainingTTL,
-    ResolvedTTL,
-};
+use kape::{BackendSetItem, CacheBackend, IterationFreshness, Lookup, RemainingTTL, ResolvedTTL};
 
 /// Checks miss, immortal round-trip, removal, and zero-value-safe hit semantics.
 ///
@@ -19,7 +16,6 @@ use kape::{
 pub async fn assert_backend_contract<B, K, V>(backend: &B, key: &K, value: V)
 where
     B: CacheBackend<K, V>,
-    B::Error: Debug,
     K: Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
@@ -69,7 +65,6 @@ where
 pub async fn assert_expiring_contract<B, K, V>(backend: &B, key: &K, value: V, ttl: Duration)
 where
     B: CacheBackend<K, V>,
-    B::Error: Debug,
     K: Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
@@ -114,7 +109,6 @@ pub async fn assert_batch_contract<B, K, V>(
     second_value: V,
 ) where
     B: CacheBackend<K, V>,
-    B::Error: Debug,
     K: Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
@@ -216,7 +210,6 @@ pub async fn assert_management_contract<B, K, V>(
     second_value: V,
 ) where
     B: CacheBackend<K, V>,
-    B::Error: Debug,
     K: Clone + Debug + Eq + Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
@@ -246,13 +239,10 @@ pub async fn assert_management_contract<B, K, V>(
     let mut cursor = None;
     let mut seen = Vec::new();
     for _ in 0..1_000 {
-        let capability = backend
+        let page = backend
             .iterate(cursor.as_deref(), 1)
             .await
             .expect("management contract iteration failed");
-        let BackendCapability::Supported(page) = capability else {
-            panic!("management contract iteration is unsupported");
-        };
         for entry in page.entries {
             assert_eq!(entry.freshness, IterationFreshness::Fresh);
             seen.push(entry.key);
@@ -266,10 +256,7 @@ pub async fn assert_management_contract<B, K, V>(
     assert!(seen.contains(first_key), "iteration lost first key");
     assert!(seen.contains(second_key), "iteration lost second key");
 
-    assert!(matches!(
-        backend.clear().await.expect("management clear failed"),
-        BackendCapability::Supported(())
-    ));
+    backend.clear().await.expect("management clear failed");
     assert_eq!(
         backend
             .has_many(&keys)

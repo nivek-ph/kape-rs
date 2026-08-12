@@ -1,8 +1,6 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    error::Error as StdError,
-    fmt,
     hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
@@ -10,10 +8,11 @@ use std::{
 
 use async_trait::async_trait;
 use kape::{
-    BackendCapability, CacheBackend, CacheEntry, IterationEntry, IterationFreshness, IterationPage,
-    Lookup, RemainingTTL, ResolvedTTL,
+    CacheBackend, CacheEntry, IterationEntry, IterationFreshness, IterationPage, KapeError, Lookup,
+    RemainingTTL, ResolvedTTL,
 };
 use moka::future::Cache;
+use thiserror::Error;
 
 /// Internal value representation used by the current storage engine.
 struct MemoryEntry<V> {
@@ -31,24 +30,21 @@ impl<V> Clone for MemoryEntry<V> {
 }
 
 /// An in-memory adapter failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum MemoryError {
     /// The requested TTL cannot be represented by `Instant`.
+    #[error("TTL exceeds the in-memory clock range")]
     TTLOverflow,
     /// The iteration cursor was not produced by this adapter.
+    #[error("invalid memory iteration cursor")]
     InvalidCursor,
 }
 
-impl fmt::Display for MemoryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TTLOverflow => formatter.write_str("TTL exceeds the in-memory clock range"),
-            Self::InvalidCursor => formatter.write_str("invalid memory iteration cursor"),
-        }
+impl From<MemoryError> for KapeError {
+    fn from(error: MemoryError) -> Self {
+        Self::backend(error)
     }
 }
-
-impl StdError for MemoryError {}
 
 /// Kape's local in-memory backend.
 ///
@@ -96,9 +92,7 @@ where
     K: Clone + Eq + Hash + Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    type Error = MemoryError;
-
-    async fn get(&self, key: &K) -> Result<Lookup<V>, Self::Error> {
+    async fn get(&self, key: &K) -> Result<Lookup<V>, KapeError> {
         let Some(entry) = self.cache.get(key).await else {
             return Ok(Lookup::Miss);
         };
@@ -128,7 +122,7 @@ where
         }
     }
 
-    async fn set(&self, key: &K, value: Arc<V>, ttl: ResolvedTTL) -> Result<(), Self::Error> {
+    async fn set(&self, key: &K, value: Arc<V>, ttl: ResolvedTTL) -> Result<(), KapeError> {
         let expires_at = match ttl {
             ResolvedTTL::Never => None,
             ResolvedTTL::After(duration) => Some(
@@ -143,22 +137,22 @@ where
         Ok(())
     }
 
-    async fn remove(&self, key: &K) -> Result<(), Self::Error> {
+    async fn remove(&self, key: &K) -> Result<(), KapeError> {
         self.cache.invalidate(key).await;
         Ok(())
     }
 
-    async fn clear(&self) -> Result<BackendCapability<()>, Self::Error> {
+    async fn clear(&self) -> Result<(), KapeError> {
         self.cache.invalidate_all();
         self.cache.run_pending_tasks().await;
-        Ok(BackendCapability::Supported(()))
+        Ok(())
     }
 
     async fn iterate(
         &self,
         cursor: Option<&[u8]>,
         limit: usize,
-    ) -> Result<BackendCapability<IterationPage<K, V>>, Self::Error> {
+    ) -> Result<IterationPage<K, V>, KapeError> {
         let offset = decode_cursor(cursor)?;
         let now = Instant::now();
         let mut entries = self
@@ -193,10 +187,10 @@ where
             .ok_or(MemoryError::InvalidCursor)?;
         let next_offset = u64::try_from(next_offset).map_err(|_| MemoryError::InvalidCursor)?;
         let next_cursor = has_more.then(|| next_offset.to_be_bytes().to_vec());
-        Ok(BackendCapability::Supported(IterationPage {
+        Ok(IterationPage {
             entries,
             next_cursor,
-        }))
+        })
     }
 }
 

@@ -14,6 +14,7 @@ categories = ["caching", "asynchronous"]
 async-trait.workspace = true
 kape.workspace = true
 moka.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 kape-testkit = { path = "../kape-testkit" }

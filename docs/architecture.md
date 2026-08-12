@@ -10,7 +10,6 @@ kape::Cache<K, V>
     |
     +-- named backend policy
     +-- ordered lookup and backfill
-    +-- load queue
     +-- partial-failure reporting
     |
     +-- kape-memory      Arc<V>, no serialization
@@ -26,12 +25,11 @@ The `kape` crate owns:
 - exact backend ordering and unique instance names;
 - lookup, write, backfill, invalidation, and management orchestration;
 - TTL resolution and failure policies;
-- a per-cache/per-key load queue;
 - optional tracing events.
 
 The core has no async-runtime, Moka, Redis, PostgreSQL, or serialization
-dependency. The public API keeps `K` and `V` typed; only the internal chain
-erases concrete backend and error types.
+dependency. The public interface keeps `K` and `V` typed, erases only the
+concrete backend type in the internal chain, and uses `KapeError` throughout.
 
 ## Read flow
 
@@ -60,4 +58,4 @@ operation and backend and can aggregate partial failures.
 Tag invalidation, cross-instance synchronization, hooks, built-in metrics, and
 background writes are intentionally outside the core MVP. They introduce
 metadata, delivery, ordering, or lifecycle requirements that should remain
-separate capabilities rather than expanding the minimal backend contract.
+separate capabilities rather than expanding the cache backend contract.

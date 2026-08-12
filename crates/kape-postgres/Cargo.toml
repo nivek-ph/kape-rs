@@ -19,6 +19,7 @@ rustls = ["sqlx/tls-rustls-ring"]
 async-trait.workspace = true
 kape.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 kape-testkit = { path = "../kape-testkit" }
