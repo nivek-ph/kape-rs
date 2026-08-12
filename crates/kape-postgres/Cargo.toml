@@ -1,0 +1,28 @@
+[package]
+name = "kape-postgres"
+description = "PostgreSQL backend adapter for Kape."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/kape-postgres"
+keywords = ["cache", "caching", "postgresql", "async"]
+categories = ["caching", "asynchronous", "database"]
+
+[features]
+default = []
+native-tls = ["sqlx/tls-native-tls"]
+rustls = ["sqlx/tls-rustls-ring"]
+
+[dependencies]
+async-trait.workspace = true
+kape.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+kape-testkit = { path = "../kape-testkit" }
+tokio.workspace = true
+
+[lints]
+workspace = true

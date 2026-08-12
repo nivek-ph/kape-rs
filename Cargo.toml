@@ -1,0 +1,42 @@
+[workspace]
+members = [
+	"crates/*",
+	"examples/layered",
+	"examples/memory",
+	"examples/postgres",
+	"examples/redis",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+async-trait = "0.1.92"
+event-listener = "5.4.2"
+futures-lite = "2.6.1"
+kape = { path = "crates/kape", version = "0.0.1" }
+kape-memory = { path = "crates/kape-memory", version = "0.0.1" }
+kape-postgres = { path = "crates/kape-postgres", version = "0.0.1" }
+kape-redis = { path = "crates/kape-redis", version = "0.0.1" }
+moka = { version = "0.12.16", default-features = false, features = ["future"] }
+redis = { version = "1.2.2", default-features = false, features = [
+	"connection-manager",
+	"tokio-comp",
+] }
+sqlx = { version = "0.9.0", default-features = false, features = [
+	"postgres",
+	"runtime-tokio",
+] }
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
+tracing = { version = "0.1.41", default-features = false, features = ["std"] }

@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  MSRV: "1.96.0"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Test workspace
+        run: cargo test --workspace --all-features
+
+  adapter-contracts:
+    name: Live adapter contracts
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16.9-alpine
+        env:
+          POSTGRES_DB: kape
+          POSTGRES_USER: kape
+          POSTGRES_PASSWORD: kape
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kape -d kape"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      KAPE_REDIS_URL: redis://127.0.0.1/
+      KAPE_POSTGRES_URL: postgres://kape:kape@127.0.0.1/kape
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Test Redis contract
+        run: cargo test -p kape-redis --test contract -- --ignored
+      - name: Test PostgreSQL contract
+        run: cargo test -p kape-postgres --test contract -- --ignored
+
+  feature-checks:
+    name: Feature checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Check core without optional features
+        run: cargo check -p kape --no-default-features
+      - name: Check adapters with default features
+        run: cargo check -p kape-memory -p kape-redis -p kape-postgres
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Check workspace on MSRV
+        run: cargo check --workspace --all-features --locked
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Check rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
+      - name: Install mdBook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 0.5.4
+      - name: Build guide
+        run: mdbook build
+      - name: Test guide code blocks
+        run: mdbook test
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Verify packages
+        run: cargo package -p kape -p kape-memory -p kape-redis -p kape-postgres

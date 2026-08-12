@@ -1,0 +1,15 @@
+[book]
+title = "Kape"
+description = "Composable multi-backend caching for Rust"
+authors = ["nivek"]
+language = "en"
+src = "docs"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+no-section-label = true
+
+[output.html.search]
+enable = true
+limit-results = 20

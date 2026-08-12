@@ -1,0 +1,15 @@
+[package]
+name = "kape-example-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kape.workspace = true
+kape-memory.workspace = true
+tokio = { version = "1.40.0", features = ["full"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "kape-memory"
+description = "In-memory backend adapter for Kape."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/kape-memory"
+keywords = ["cache", "caching", "memory", "async"]
+categories = ["caching", "asynchronous"]
+
+[dependencies]
+async-trait.workspace = true
+kape.workspace = true
+moka.workspace = true
+
+[dev-dependencies]
+kape-testkit = { path = "../kape-testkit" }
+futures-lite.workspace = true
+
+[lints]
+workspace = true

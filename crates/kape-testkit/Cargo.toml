@@ -1,0 +1,15 @@
+[package]
+name = "kape-testkit"
+description = "Reusable backend contract tests for Kape adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+documentation = "https://docs.rs/kape-testkit"
+publish = false
+
+[dependencies]
+kape.workspace = true
+
+[lints]
+workspace = true
