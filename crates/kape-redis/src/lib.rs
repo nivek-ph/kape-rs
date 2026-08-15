@@ -6,5 +6,5 @@ mod error;
 mod lookup;
 
 pub use backend::RedisBackend;
-pub use codec::{RedisCodec, StringCodec, StringCodecError};
+pub use codec::{RedisCodec, StringCodec};
 pub use error::RedisBackendError;

@@ -5,10 +5,10 @@ use thiserror::Error;
 
 /// A `Redis` adapter failure.
 #[derive(Debug, Error)]
-pub enum RedisBackendError<E> {
+pub enum RedisBackendError {
     /// Key or value encoding failed.
     #[error("Redis codec failed: {0}")]
-    Codec(#[source] E),
+    Codec(#[source] Box<dyn StdError + Send + Sync>),
     /// `Redis` client or server operation failed.
     #[error("Redis operation failed: {0}")]
     Redis(#[from] redis::RedisError),
@@ -32,11 +32,18 @@ pub enum RedisBackendError<E> {
     InvalidKeyFrame,
 }
 
-impl<E> From<RedisBackendError<E>> for KapeError
-where
-    E: StdError + Send + Sync + 'static,
-{
-    fn from(error: RedisBackendError<E>) -> Self {
+impl RedisBackendError {
+    /// Erases a codec-specific error at the adapter boundary.
+    pub fn codec<E>(error: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Codec(Box::new(error))
+    }
+}
+
+impl From<RedisBackendError> for KapeError {
+    fn from(error: RedisBackendError) -> Self {
         Self::backend(error)
     }
 }

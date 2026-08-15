@@ -8,7 +8,7 @@ pub(crate) fn decode_lookup<K, V, C>(
     codec: &C,
     bytes: Option<&[u8]>,
     pttl: i64,
-) -> Result<Lookup<V>, RedisBackendError<C::Error>>
+) -> Result<Lookup<V>, RedisBackendError>
 where
     C: RedisCodec<K, V>,
 {
@@ -18,11 +18,7 @@ where
     let Some(remaining_ttl) = remaining_ttl(pttl)? else {
         return Ok(Lookup::Miss);
     };
-    let value = Arc::new(
-        codec
-            .decode_value(bytes)
-            .map_err(RedisBackendError::Codec)?,
-    );
+    let value = Arc::new(codec.decode_value(bytes)?);
     Ok(Lookup::Hit(CacheEntry::new(value, remaining_ttl)))
 }
 
@@ -30,7 +26,7 @@ pub(crate) fn decode_pair<K, V, C>(
     codec: &C,
     value: &redis::Value,
     pttl: &redis::Value,
-) -> Result<Lookup<V>, RedisBackendError<C::Error>>
+) -> Result<Lookup<V>, RedisBackendError>
 where
     C: RedisCodec<K, V>,
 {
@@ -55,7 +51,7 @@ pub(crate) fn iteration_entry<K, V, C>(
     codec: &C,
     encoded_key: &[u8],
     lookup: Lookup<V>,
-) -> Result<Option<IterationEntry<K, V>>, RedisBackendError<C::Error>>
+) -> Result<Option<IterationEntry<K, V>>, RedisBackendError>
 where
     C: RedisCodec<K, V>,
 {
@@ -64,9 +60,7 @@ where
         Lookup::Hit(entry) => (entry, IterationFreshness::Fresh),
         Lookup::Stale(entry) => (entry, IterationFreshness::Stale),
     };
-    let key = codec
-        .decode_key(encoded_key)
-        .map_err(RedisBackendError::Codec)?;
+    let key = codec.decode_key(encoded_key)?;
     Ok(Some(IterationEntry {
         key,
         value: entry.value,
@@ -75,7 +69,7 @@ where
     }))
 }
 
-fn remaining_ttl<E>(pttl: i64) -> Result<Option<RemainingTTL>, RedisBackendError<E>> {
+fn remaining_ttl(pttl: i64) -> Result<Option<RemainingTTL>, RedisBackendError> {
     match pttl {
         -2 => Ok(None),
         -1 => Ok(Some(RemainingTTL::Never)),
