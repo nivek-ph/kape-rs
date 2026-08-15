@@ -79,7 +79,7 @@ where
         }
     }
 
-    /// Frames every encoded key with the supplied namespace.
+    /// Adds the supplied namespace to every encoded key.
     ///
     /// The namespace is joined to each encoded key with `:`. Namespace and
     /// encoded key bytes must not contain `:`. The namespace must also avoid

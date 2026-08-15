@@ -1,16 +1,16 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use crate::{PostgresBackendError, PostgresCodec};
+use crate::{PostgresBackendError, PostgresCodec, StringCodec};
 use async_trait::async_trait;
 use kape::{BackendSetItem, CacheBackend, IterationPage, KapeError, Lookup, ResolvedTTL};
 use sqlx::{AssertSqlSafe, PgPool, Row};
 
 /// A `Kape` backend using `PostgreSQL`.
-pub struct PostgresBackend<K, V, C> {
+pub struct PostgresBackend<K, V, C = StringCodec> {
     pool: PgPool,
     codec: C,
     table: String,
-    namespace: Vec<u8>,
+    namespace: String,
     marker: PhantomData<fn(K, V)>,
 }
 
@@ -29,22 +29,41 @@ where
     }
 }
 
+impl<K, V> PostgresBackend<K, V> {
+    /// Creates an adapter using the `kape_entries` table.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            codec: StringCodec::default(),
+            table: "kape_entries".to_owned(),
+            namespace: String::new(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, C> PostgresBackend<K, V, C> {
+    /// Replaces the current codec with an application-specific codec.
+    #[must_use]
+    pub fn with_codec<D>(self, codec: D) -> PostgresBackend<K, V, D>
+    where
+        D: PostgresCodec<K, V>,
+    {
+        PostgresBackend {
+            pool: self.pool,
+            codec,
+            table: self.table,
+            namespace: self.namespace,
+            marker: PhantomData,
+        }
+    }
+}
+
 impl<K, V, C> PostgresBackend<K, V, C>
 where
     C: PostgresCodec<K, V>,
 {
-    /// Creates an adapter using the `kape_entries` table.
-    #[must_use]
-    pub fn new(pool: PgPool, codec: C) -> Self {
-        Self {
-            pool,
-            codec,
-            table: "kape_entries".to_owned(),
-            namespace: Vec::new(),
-            marker: PhantomData,
-        }
-    }
-
     /// Selects a validated `table` or `schema.table` identifier.
     ///
     /// # Errors
@@ -53,13 +72,13 @@ where
     /// a safe one- or two-component SQL identifier.
     pub fn with_table(mut self, table: &str) -> Result<Self, KapeError> {
         self.table = validate_table_name(table)
-            .ok_or_else(|| PostgresBackendError::<C::Error>::InvalidTableName(table.to_owned()))?;
+            .ok_or_else(|| PostgresBackendError::InvalidTableName(table.to_owned()))?;
         Ok(self)
     }
 
-    /// Frames every encoded key with the supplied namespace.
+    /// Sets the namespace for the adapter.
     #[must_use]
-    pub fn namespace(mut self, namespace: impl Into<Vec<u8>>) -> Self {
+    pub fn namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = namespace.into();
         self
     }
@@ -82,14 +101,11 @@ where
             .bind(&self.table)
             .fetch_one(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
-        if row
-            .try_get("present")
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?
-        {
+            .map_err(PostgresBackendError::Sqlx)?;
+        if row.try_get("present").map_err(PostgresBackendError::Sqlx)? {
             Ok(())
         } else {
-            Err(PostgresBackendError::<C::Error>::TableNotFound(self.table.clone()).into())
+            Err(PostgresBackendError::TableNotFound(self.table.clone()).into())
         }
     }
 
@@ -108,16 +124,14 @@ where
         let result = sqlx::query(AssertSqlSafe(statement))
             .execute(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(result.rows_affected())
     }
 
-    fn encode_key(&self, key: &K) -> Result<Vec<u8>, PostgresBackendError<C::Error>> {
-        let encoded = self
-            .codec
-            .encode_key(key)
-            .map_err(PostgresBackendError::Codec)?;
-        frame_key(&self.namespace, &encoded).ok_or(PostgresBackendError::NamespaceTooLong)
+    fn encode_key(&self, key: &K) -> Result<Vec<u8>, PostgresBackendError> {
+        let encoded = self.codec.encode_key(key)?;
+        build_key(&self.namespace.as_bytes(), &encoded)
+            .ok_or(PostgresBackendError::NamespaceTooLong)
     }
 }
 
@@ -142,29 +156,24 @@ where
             .bind(key)
             .fetch_optional(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?
+            .map_err(PostgresBackendError::Sqlx)?
         else {
             return Ok(Lookup::Miss);
         };
 
-        let bytes: Vec<u8> = row
-            .try_get("value")
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+        let bytes: Vec<u8> = row.try_get("value").map_err(PostgresBackendError::Sqlx)?;
         let remaining_ms: Option<i64> = row
             .try_get("remaining_ms")
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         crate::lookup::lookup(&self.codec, Some(&bytes), remaining_ms).map_err(Into::into)
     }
 
     async fn set(&self, key: &K, value: Arc<V>, ttl: ResolvedTTL) -> Result<(), KapeError> {
         let key = self.encode_key(key)?;
-        let bytes = self
-            .codec
-            .encode_value(value.as_ref())
-            .map_err(PostgresBackendError::Codec)?;
+        let bytes = self.codec.encode_value(value.as_ref())?;
         let ttl_ms = match ttl {
             ResolvedTTL::Never => None,
-            ResolvedTTL::After(duration) => Some(duration_millis::<C::Error>(duration)?),
+            ResolvedTTL::After(duration) => Some(duration_millis(duration)?),
         };
         let statement = format!(
             "INSERT INTO {} (key, value, expires_at_ms) \
@@ -180,7 +189,7 @@ where
             .bind(ttl_ms)
             .execute(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(())
     }
 
@@ -191,7 +200,7 @@ where
             .bind(key)
             .execute(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(())
     }
 
@@ -221,21 +230,20 @@ where
             .bind(keys)
             .fetch_all(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         rows.into_iter()
             .map(|row| {
-                let bytes: Option<Vec<u8>> = row
-                    .try_get("value")
-                    .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+                let bytes: Option<Vec<u8>> =
+                    row.try_get("value").map_err(PostgresBackendError::Sqlx)?;
                 let Some(bytes) = bytes else {
                     return Ok(Lookup::Miss);
                 };
                 let remaining_ms: Option<i64> = row
                     .try_get("remaining_ms")
-                    .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+                    .map_err(PostgresBackendError::Sqlx)?;
                 crate::lookup::lookup(&self.codec, Some(&bytes), remaining_ms)
             })
-            .collect::<Result<Vec<_>, PostgresBackendError<C::Error>>>()
+            .collect::<Result<Vec<_>, PostgresBackendError>>()
             .map_err(Into::into)
     }
 
@@ -252,13 +260,11 @@ where
                 };
                 Ok((
                     self.encode_key(item.key)?,
-                    self.codec
-                        .encode_value(item.value.as_ref())
-                        .map_err(PostgresBackendError::Codec)?,
+                    self.codec.encode_value(item.value.as_ref())?,
                     ttl_ms,
                 ))
             })
-            .collect::<Result<Vec<_>, PostgresBackendError<C::Error>>>()?;
+            .collect::<Result<Vec<_>, PostgresBackendError>>()?;
         let statement = format!(
             "INSERT INTO {} (key, value, expires_at_ms) \
              VALUES ($1, $2, CASE WHEN $3::BIGINT IS NULL THEN NULL \
@@ -271,7 +277,7 @@ where
             .pool
             .begin()
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         for (key, value, ttl_ms) in encoded {
             sqlx::query(AssertSqlSafe(statement.as_str()))
                 .bind(key)
@@ -279,12 +285,12 @@ where
                 .bind(ttl_ms)
                 .execute(&mut *transaction)
                 .await
-                .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+                .map_err(PostgresBackendError::Sqlx)?;
         }
         transaction
             .commit()
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(())
     }
 
@@ -314,11 +320,11 @@ where
             .bind(keys)
             .fetch_all(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         rows.into_iter()
             .map(|row| {
                 row.try_get("present")
-                    .map_err(PostgresBackendError::<C::Error>::Sqlx)
+                    .map_err(PostgresBackendError::Sqlx)
                     .map_err(Into::into)
             })
             .collect()
@@ -337,15 +343,15 @@ where
             .bind(keys)
             .execute(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(())
     }
 
     async fn clear(&self) -> Result<(), KapeError> {
-        let prefix = frame_key(&self.namespace, &[])
-            .ok_or(PostgresBackendError::<C::Error>::NamespaceTooLong)?;
-        let prefix_len = i32::try_from(prefix.len())
-            .map_err(|_| PostgresBackendError::<C::Error>::NamespaceTooLong)?;
+        let prefix = build_key(&self.namespace.as_bytes(), &[])
+            .ok_or(PostgresBackendError::NamespaceTooLong)?;
+        let prefix_len =
+            i32::try_from(prefix.len()).map_err(|_| PostgresBackendError::NamespaceTooLong)?;
         let statement = format!(
             "DELETE FROM {} WHERE substring(key from 1 for $2) = $1",
             self.table
@@ -355,7 +361,7 @@ where
             .bind(prefix_len)
             .execute(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         Ok(())
     }
 
@@ -364,17 +370,17 @@ where
         cursor: Option<&[u8]>,
         limit: usize,
     ) -> Result<IterationPage<K, V>, KapeError> {
-        let prefix = frame_key(&self.namespace, &[])
-            .ok_or(PostgresBackendError::<C::Error>::NamespaceTooLong)?;
+        let prefix = build_key(&self.namespace.as_bytes(), &[])
+            .ok_or(PostgresBackendError::NamespaceTooLong)?;
         if cursor.is_some_and(|cursor| !cursor.starts_with(&prefix)) {
-            return Err(PostgresBackendError::<C::Error>::InvalidCursor.into());
+            return Err(PostgresBackendError::InvalidCursor.into());
         }
-        let prefix_len = i32::try_from(prefix.len())
-            .map_err(|_| PostgresBackendError::<C::Error>::NamespaceTooLong)?;
+        let prefix_len =
+            i32::try_from(prefix.len()).map_err(|_| PostgresBackendError::NamespaceTooLong)?;
         let fetch_limit = limit
             .checked_add(1)
             .and_then(|value| i64::try_from(value).ok())
-            .ok_or(PostgresBackendError::<C::Error>::IterationLimitOverflow)?;
+            .ok_or(PostgresBackendError::IterationLimitOverflow)?;
         let statement = format!(
             "SELECT key, value, \
              CASE WHEN expires_at_ms IS NULL THEN NULL \
@@ -394,24 +400,20 @@ where
             .bind(fetch_limit)
             .fetch_all(&self.pool)
             .await
-            .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            .map_err(PostgresBackendError::Sqlx)?;
         let has_more = rows.len() > limit;
         let rows = rows.into_iter().take(limit);
         let mut entries = Vec::with_capacity(limit);
         let mut last_key = None;
         for row in rows {
-            let framed_key: Vec<u8> = row
-                .try_get("key")
-                .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+            let framed_key: Vec<u8> = row.try_get("key").map_err(PostgresBackendError::Sqlx)?;
             let encoded_key = framed_key
                 .strip_prefix(prefix.as_slice())
-                .ok_or(PostgresBackendError::<C::Error>::InvalidCursor)?;
-            let bytes: Vec<u8> = row
-                .try_get("value")
-                .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+                .ok_or(PostgresBackendError::InvalidCursor)?;
+            let bytes: Vec<u8> = row.try_get("value").map_err(PostgresBackendError::Sqlx)?;
             let remaining_ms: Option<i64> = row
                 .try_get("remaining_ms")
-                .map_err(PostgresBackendError::<C::Error>::Sqlx)?;
+                .map_err(PostgresBackendError::Sqlx)?;
             entries.push(crate::lookup::iteration_entry(
                 &self.codec,
                 encoded_key,
@@ -432,7 +434,7 @@ where
     }
 }
 
-fn duration_millis<E>(duration: Duration) -> Result<i64, PostgresBackendError<E>> {
+fn duration_millis(duration: Duration) -> Result<i64, PostgresBackendError> {
     let millis = duration.as_millis();
     let millis = if millis == 0 { 1 } else { millis };
     i64::try_from(millis).map_err(|_| PostgresBackendError::TTLOverflow)
@@ -461,7 +463,7 @@ fn valid_identifier(identifier: &str) -> bool {
         && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
-fn frame_key(namespace: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+fn build_key(namespace: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     let namespace_len = u64::try_from(namespace.len()).ok()?;
     let mut framed = Vec::with_capacity(8 + namespace.len() + key.len());
     framed.extend_from_slice(&namespace_len.to_be_bytes());
@@ -492,8 +494,8 @@ mod tests {
     #[test]
     fn namespace_frame_has_no_delimiter_collision() {
         assert_ne!(
-            frame_key(b"a", b"b:c").unwrap(),
-            frame_key(b"a:b", b"c").unwrap()
+            build_key(b"a", b"b:c").unwrap(),
+            build_key(b"a:b", b"c").unwrap()
         );
     }
 }

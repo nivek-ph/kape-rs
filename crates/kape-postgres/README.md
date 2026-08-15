@@ -7,10 +7,10 @@ epoch milliseconds. Remaining TTL is calculated with the `PostgreSQL` server
 clock, avoiding application/server clock skew.
 
 ```rust,no_run
-use kape_postgres::{PostgresBackend, StringCodec};
+use kape_postgres::PostgresBackend;
 
 # async fn example(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
-let backend = PostgresBackend::new(pool, StringCodec)
+let backend = PostgresBackend::<String, String>::new(pool)
     .namespace("my-service");
 backend.check_table().await?;
 # let _ = backend;
@@ -33,8 +33,10 @@ CREATE TABLE kape_entries (
 the database. The default is `kape_entries`. Use
 `with_table("schema.table")` to select another validated SQL identifier.
 
-Implement `PostgresCodec<K, V>` for application-specific serialization. The
-codec encodes and decodes keys because iteration returns typed `K` values.
+The default `StringCodec` handles `String` keys and values. Use
+`with_codec(...)` when an application-specific `PostgresCodec<K, V>` is needed;
+the codec encodes and decodes keys because iteration returns typed `K` values.
+
 `Kape` never logs encoded keys or values.
 
 Encoded keys are length-framed with the configured namespace, avoiding

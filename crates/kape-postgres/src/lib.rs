@@ -6,5 +6,5 @@ mod error;
 mod lookup;
 
 pub use backend::PostgresBackend;
-pub use codec::{PostgresCodec, StringCodec, StringCodecError};
+pub use codec::{PostgresCodec, StringCodec};
 pub use error::PostgresBackendError;

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kape::{CacheBackend, KapeError, Lookup, ResolvedTTL};
-use kape_postgres::{PostgresBackend, PostgresBackendError, StringCodec, StringCodecError};
+use kape_postgres::{PostgresBackend, PostgresBackendError};
 use kape_testkit::{
     assert_backend_contract, assert_batch_contract, assert_expiring_contract,
     assert_management_contract,
@@ -25,21 +25,21 @@ async fn satisfies_backend_contract() {
     .await
     .expect("test table setup failed");
     let namespace = format!("kape-contract-{}", std::process::id());
-    let backend = PostgresBackend::new(pool, StringCodec).namespace(namespace);
+    let backend = PostgresBackend::<String, String>::new(pool).namespace(namespace);
     backend
         .check_table()
         .await
         .expect("test table should exist");
 
     let missing_table = format!("kape_missing_{}", std::process::id());
-    let missing = PostgresBackend::<String, String, _>::new(backend.pool().clone(), StringCodec)
+    let missing = PostgresBackend::<String, String>::new(backend.pool().clone())
         .with_table(&missing_table)
         .expect("generated table name should be valid");
     let Err(KapeError::BackendSource { source }) = missing.check_table().await else {
         panic!("missing table should return a backend source error");
     };
     assert!(matches!(
-        source.downcast_ref::<PostgresBackendError<StringCodecError>>(),
+        source.downcast_ref::<PostgresBackendError>(),
         Some(PostgresBackendError::TableNotFound(_))
     ));
 
@@ -65,7 +65,7 @@ async fn satisfies_backend_contract() {
         .await
         .expect("contract cleanup failed");
 
-    let protected = PostgresBackend::new(backend.pool().clone(), StringCodec)
+    let protected = PostgresBackend::<String, String>::new(backend.pool().clone())
         .namespace(format!("kape-protected-{}", std::process::id()));
     protected
         .set(

@@ -5,10 +5,10 @@ use thiserror::Error;
 
 /// A `PostgreSQL` adapter failure.
 #[derive(Debug, Error)]
-pub enum PostgresBackendError<E> {
+pub enum PostgresBackendError {
     /// Key or value encoding failed.
     #[error("PostgreSQL codec failed: {0}")]
-    Codec(#[source] E),
+    Codec(#[source] Box<dyn StdError + Send + Sync>),
     /// `PostgreSQL` operation failed.
     #[error("PostgreSQL operation failed: {0}")]
     Sqlx(#[from] sqlx::Error),
@@ -35,11 +35,18 @@ pub enum PostgresBackendError<E> {
     IterationLimitOverflow,
 }
 
-impl<E> From<PostgresBackendError<E>> for KapeError
-where
-    E: StdError + Send + Sync + 'static,
-{
-    fn from(error: PostgresBackendError<E>) -> Self {
+impl PostgresBackendError {
+    /// Erases a codec-specific error at the adapter boundary.
+    pub fn codec<E>(error: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Codec(Box::new(error))
+    }
+}
+
+impl From<PostgresBackendError> for KapeError {
+    fn from(error: PostgresBackendError) -> Self {
         Self::backend(error)
     }
 }
