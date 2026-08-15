@@ -12,7 +12,7 @@ use kape_testkit::{
 async fn satisfies_backend_contract() {
     let url = std::env::var("KAPE_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_owned());
     let namespace = format!("kape-contract-{}", std::process::id());
-    let backend = RedisBackend::connect(&url, StringCodec)
+    let backend = RedisBackend::connect(&url)
         .await
         .expect("Redis connection failed")
         .namespace(namespace);

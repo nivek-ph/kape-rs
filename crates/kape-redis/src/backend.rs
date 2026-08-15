@@ -1,15 +1,15 @@
-use std::{marker::PhantomData, sync::Arc, time::Duration};
-
+use crate::codec::StringCodec;
 use crate::{RedisBackendError, RedisCodec};
 use async_trait::async_trait;
 use kape::{BackendSetItem, CacheBackend, IterationPage, KapeError, Lookup, ResolvedTTL};
 use redis::aio::ConnectionManager;
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 /// A `Kape` backend using `Redis`.
-pub struct RedisBackend<K, V, C> {
+pub struct RedisBackend<K, V, C = StringCodec> {
+    namespace: String,
     connection: ConnectionManager,
     codec: C,
-    namespace: Vec<u8>,
     marker: PhantomData<fn(K, V)>,
 }
 
@@ -19,9 +19,46 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            namespace: self.namespace.clone(),
             connection: self.connection.clone(),
             codec: self.codec.clone(),
-            namespace: self.namespace.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V> RedisBackend<K, V> {
+    /// Connects to Redis and creates an adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `Redis` error when the URL is invalid or the initial
+    /// connection cannot be established.
+    pub async fn connect(url: &str) -> Result<Self, KapeError> {
+        let client = redis::Client::open(url).map_err(RedisBackendError::Redis)?;
+        let connection = ConnectionManager::new(client)
+            .await
+            .map_err(RedisBackendError::Redis)?;
+        Ok(Self {
+            namespace: String::new(),
+            connection,
+            codec: StringCodec::default(),
+            marker: PhantomData,
+        })
+    }
+}
+
+impl<K, V, C> RedisBackend<K, V, C> {
+    /// Replaces the current codec with an application-specific codec.
+    #[must_use]
+    pub fn with_codec<D>(self, codec: D) -> RedisBackend<K, V, D>
+    where
+        D: RedisCodec<K, V>,
+    {
+        RedisBackend {
+            namespace: self.namespace,
+            connection: self.connection,
+            codec,
             marker: PhantomData,
         }
     }
@@ -31,34 +68,25 @@ impl<K, V, C> RedisBackend<K, V, C>
 where
     C: RedisCodec<K, V>,
 {
-    /// Connects to Redis and creates an adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `Redis` error when the URL is invalid or the initial
-    /// connection cannot be established.
-    pub async fn connect(url: &str, codec: C) -> Result<Self, KapeError> {
-        let client = redis::Client::open(url).map_err(RedisBackendError::Redis)?;
-        let connection = ConnectionManager::new(client)
-            .await
-            .map_err(RedisBackendError::Redis)?;
-        Ok(Self::from_connection(connection, codec))
-    }
-
     /// Creates an adapter from an existing connection manager.
     #[must_use]
     pub const fn from_connection(connection: ConnectionManager, codec: C) -> Self {
         Self {
             connection,
             codec,
-            namespace: Vec::new(),
+            namespace: String::new(),
             marker: PhantomData,
         }
     }
 
     /// Frames every encoded key with the supplied namespace.
+    ///
+    /// The namespace is joined to each encoded key with `:`. Namespace and
+    /// encoded key bytes must not contain `:`. The namespace must also avoid
+    /// Redis glob metacharacters (`*`, `?`, `[`, `]`, or `\\`) because it is
+    /// used directly in `SCAN MATCH` patterns.
     #[must_use]
-    pub fn namespace(mut self, namespace: impl Into<Vec<u8>>) -> Self {
+    pub fn namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = namespace.into();
         self
     }
@@ -71,7 +99,7 @@ where
 
     fn encode_key(&self, key: &K) -> Result<Vec<u8>, RedisBackendError> {
         let encoded = self.codec.encode_key(key)?;
-        frame_key(&self.namespace, &encoded).ok_or(RedisBackendError::NamespaceTooLong)
+        Ok(build_key(&self.namespace.as_bytes(), &encoded))
     }
 }
 
@@ -236,7 +264,9 @@ where
     }
 
     async fn clear(&self) -> Result<(), KapeError> {
-        let pattern = namespace_pattern(&self.namespace)?;
+        let prefix = build_key(&self.namespace.as_bytes(), &[]);
+        let mut pattern = prefix;
+        pattern.push(b'*');
         let mut connection = self.connection.clone();
         loop {
             let mut cursor = 0_u64;
@@ -276,8 +306,9 @@ where
         limit: usize,
     ) -> Result<IterationPage<K, V>, KapeError> {
         let cursor = decode_cursor(cursor)?;
-        let prefix = frame_key(&self.namespace, &[]).ok_or(RedisBackendError::NamespaceTooLong)?;
-        let pattern = namespace_pattern(&self.namespace)?;
+        let prefix = build_key(&self.namespace.as_bytes(), &[]);
+        let mut pattern = prefix.clone();
+        pattern.push(b'*');
         let mut connection = self.connection.clone();
         let (next, framed_keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
             .arg(cursor)
@@ -326,6 +357,7 @@ where
     }
 }
 
+/// Converts a duration to milliseconds, rounding up to 1ms if the duration is
 fn duration_millis(duration: Duration) -> Result<u64, RedisBackendError> {
     let millis = duration.as_millis();
     let millis = if millis == 0 { 1 } else { millis };
@@ -342,26 +374,13 @@ fn decode_cursor(cursor: Option<&[u8]>) -> Result<u64, RedisBackendError> {
     Ok(u64::from_be_bytes(bytes))
 }
 
-fn namespace_pattern(namespace: &[u8]) -> Result<Vec<u8>, RedisBackendError> {
-    let prefix = frame_key(namespace, &[]).ok_or(RedisBackendError::NamespaceTooLong)?;
-    let mut pattern = Vec::with_capacity(prefix.len() + 1);
-    for byte in prefix {
-        if matches!(byte, b'*' | b'?' | b'[' | b']' | b'\\') {
-            pattern.push(b'\\');
-        }
-        pattern.push(byte);
-    }
-    pattern.push(b'*');
-    Ok(pattern)
-}
-
-fn frame_key(namespace: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let namespace_len = u64::try_from(namespace.len()).ok()?;
-    let mut framed = Vec::with_capacity(8 + namespace.len() + key.len());
-    framed.extend_from_slice(&namespace_len.to_be_bytes());
+/// Builds a key by concatenating the namespace and key with a delimiter.
+fn build_key(namespace: &[u8], key: &[u8]) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(namespace.len() + 1 + key.len());
     framed.extend_from_slice(namespace);
+    framed.push(b':');
     framed.extend_from_slice(key);
-    Some(framed)
+    framed
 }
 
 #[cfg(test)]
@@ -373,10 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn namespace_frame_has_no_delimiter_collision() {
-        assert_ne!(
-            frame_key(b"a", b"b:c").unwrap(),
-            frame_key(b"a:b", b"c").unwrap()
-        );
+    fn namespace_frame_uses_a_delimiter() {
+        assert_eq!(build_key(b"a", b"b"), b"a:b".to_vec());
     }
 }

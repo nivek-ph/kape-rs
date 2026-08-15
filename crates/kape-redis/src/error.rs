@@ -18,9 +18,6 @@ pub enum RedisBackendError {
     /// `Redis` returned an undocumented PTTL sentinel.
     #[error("Redis returned invalid PTTL {0}")]
     InvalidPttl(i64),
-    /// A namespace length cannot be represented by the key frame.
-    #[error("Redis namespace is too long")]
-    NamespaceTooLong,
     /// A pipelined command returned an unexpected response shape.
     #[error("Redis returned an invalid batch response; expected {0}")]
     InvalidBatchResponse(&'static str),
