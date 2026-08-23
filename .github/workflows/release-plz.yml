@@ -1,4 +1,4 @@
-name: Prepare release PR
+name: Release-plz
 
 on:
   push:
@@ -6,16 +6,44 @@ on:
       - main
     paths-ignore:
       - "examples/**"
-      - "docs/**"
-
-permissions:
-  contents: write
-  pull-requests: write
+      - "tests/**"
 
 jobs:
-  release-pr:
-    name: Release-plz PR
+  # Release unpublished packages.
+  release-plz-release:
+    name: Release-plz release
+    if: ${{ github.repository_owner == 'nivek-ph' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create a PR with the new versions and changelog, preparing the next release.
+  release-plz-pr:
+    name: Release-plz PR
+    if: ${{ github.repository_owner == 'nivek-ph' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
@@ -24,9 +52,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Prepare release PR
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+      - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
           command: release-pr
