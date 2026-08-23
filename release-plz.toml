@@ -1,0 +1,30 @@
+[workspace]
+features_always_increment_minor = true
+release_always = false
+pr_labels = ["release"]
+changelog_update = false
+
+[changelog]
+protect_breaking_commits = true
+sort_commits = "newest"
+trim = true
+
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^docs?", group = "Documented" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", skip = true },
+    { message = "^style", skip = true },
+    { message = "^test", skip = true },
+    { message = "^chore", skip = true },
+    { body = ".*[sS]ecurity.*", group = "Security" },
+    { body = ".*[dD]eprecat.*", group = "Deprecated" },
+]
+
+link_parsers = [
+    { pattern = "[fF]ixes #(\\d+)", text = "fixes [#${1}]", href = "{{ remote.link }}/issues/$1" },
+    { pattern = "[cC]loses #(\\d+)", text = "closes [#${1}]", href = "{{ remote.link }}/issues/$1" },
+    { pattern = "[sS]ee #(\\d+)", text = "see [#${1}]", href = "{{ remote.link }}/issues/$1" },
+    { pattern = "#(\\d+)", href = "{{ remote.link }}/issues/$1" },
+]

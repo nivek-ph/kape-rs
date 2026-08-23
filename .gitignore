@@ -1,0 +1,33 @@
+# Cargo build output
+target/
+
+# mdBook output
+/book/
+
+# rustfmt backups
+**/*.rs.bk
+
+# Coverage output
+lcov.info
+coverage/
+
+# Local environment and logs
+.env
+**/.env
+*.log
+logs/
+**/logs/
+
+# Editor settings
+.idea/
+.vscode/
+.cursor/
+
+# Operating system files
+.DS_Store
+
+# Local archives and backups
+*.backup
+*.bk
+*.zip
+*_backup

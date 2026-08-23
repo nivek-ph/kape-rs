@@ -1,0 +1,23 @@
+[package]
+name = "kape"
+description = "Composable multi-backend caching for Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/kape"
+keywords = ["cache", "caching", "async", "backend"]
+categories = ["caching", "asynchronous"]
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+futures-lite.workspace = true
+
+[lints]
+workspace = true

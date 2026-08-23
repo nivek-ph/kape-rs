@@ -1,0 +1,836 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+use futures_lite::future::block_on;
+use kape::{
+    BackendFailure, Cache, CacheBackend, CacheEntry, CacheLookup, KapeError, Lookup, Operation,
+    SetItem,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Event {
+    Get(&'static str, String),
+    GetMany(&'static str, Vec<String>),
+    Set(&'static str, String, i64),
+    SetMany(&'static str, Vec<(String, i64)>),
+    Remove(&'static str, String),
+    RemoveMany(&'static str, Vec<String>),
+    Clear(&'static str),
+}
+
+#[derive(Clone)]
+struct RecordingBackend {
+    name: &'static str,
+    entries: Arc<Mutex<HashMap<String, CacheEntry<String>>>>,
+    events: Arc<Mutex<Vec<Event>>>,
+    failures: HashSet<&'static str>,
+    wrong_batch_len: bool,
+}
+
+impl RecordingBackend {
+    fn new(name: &'static str, events: Arc<Mutex<Vec<Event>>>) -> Self {
+        Self {
+            name,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            events,
+            failures: HashSet::new(),
+            wrong_batch_len: false,
+        }
+    }
+
+    fn entry(self, key: &str, value: &str, remaining_ttl: i64) -> Self {
+        self.entries.lock().expect("entries mutex poisoned").insert(
+            key.to_owned(),
+            CacheEntry::new(Arc::new(value.to_owned()), remaining_ttl),
+        );
+        self
+    }
+
+    fn failing_get(mut self) -> Self {
+        self.failures.insert("get");
+        self
+    }
+
+    fn failing_set(mut self) -> Self {
+        self.failures.insert("set");
+        self
+    }
+
+    fn failing_remove(mut self) -> Self {
+        self.failures.insert("remove");
+        self
+    }
+
+    fn failing_clear(mut self) -> Self {
+        self.failures.insert("clear");
+        self
+    }
+
+    fn wrong_batch_len(mut self) -> Self {
+        self.wrong_batch_len = true;
+        self
+    }
+
+    fn record(&self, event: Event) {
+        self.events
+            .lock()
+            .expect("events mutex poisoned")
+            .push(event);
+    }
+}
+
+#[async_trait::async_trait]
+impl CacheBackend<String, String> for RecordingBackend {
+    async fn get(&self, key: &String) -> Result<Lookup<String>, KapeError> {
+        self.record(Event::Get(self.name, key.clone()));
+        if self.failures.contains("get") {
+            return Err(KapeError::backend(TestError("get failed")));
+        }
+        Ok(self
+            .entries
+            .lock()
+            .expect("entries mutex poisoned")
+            .get(key)
+            .cloned()
+            .map_or(Lookup::Miss, Lookup::Hit))
+    }
+
+    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
+        self.record(Event::Set(self.name, key.clone(), ttl));
+        if self.failures.contains("set") {
+            return Err(KapeError::backend(TestError("set failed")));
+        }
+        let mut entries = self.entries.lock().expect("entries mutex poisoned");
+        if ttl == 0 {
+            entries.remove(key);
+        } else {
+            entries.insert(key.clone(), CacheEntry::new(value, ttl));
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, key: &String) -> Result<(), KapeError> {
+        self.record(Event::Remove(self.name, key.clone()));
+        if self.failures.contains("remove") {
+            return Err(KapeError::backend(TestError("remove failed")));
+        }
+        self.entries
+            .lock()
+            .expect("entries mutex poisoned")
+            .remove(key);
+        Ok(())
+    }
+
+    async fn clear(&self) -> Result<(), KapeError> {
+        self.record(Event::Clear(self.name));
+        if self.failures.contains("clear") {
+            return Err(KapeError::backend(TestError("clear failed")));
+        }
+        self.entries.lock().expect("entries mutex poisoned").clear();
+        Ok(())
+    }
+
+    async fn get_many(&self, keys: &[&String]) -> Result<Vec<Lookup<String>>, KapeError> {
+        self.record(Event::GetMany(
+            self.name,
+            keys.iter().map(|key| (*key).clone()).collect(),
+        ));
+        if self.failures.contains("get") {
+            return Err(KapeError::backend(TestError("get failed")));
+        }
+        let entries = self.entries.lock().expect("entries mutex poisoned");
+        let mut results = keys
+            .iter()
+            .map(|key| entries.get(*key).cloned().map_or(Lookup::Miss, Lookup::Hit))
+            .collect::<Vec<_>>();
+        if self.wrong_batch_len {
+            results.pop();
+        }
+        Ok(results)
+    }
+
+    async fn set_many(&self, items: &[SetItem<&String, String>]) -> Result<(), KapeError> {
+        self.record(Event::SetMany(
+            self.name,
+            items
+                .iter()
+                .map(|item| (item.key.clone(), item.ttl))
+                .collect(),
+        ));
+        if self.failures.contains("set") {
+            return Err(KapeError::backend(TestError("set failed")));
+        }
+        let mut entries = self.entries.lock().expect("entries mutex poisoned");
+        for item in items {
+            if item.ttl == 0 {
+                entries.remove(item.key);
+            } else {
+                entries.insert(
+                    item.key.clone(),
+                    CacheEntry::new(Arc::clone(&item.value), item.ttl),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn remove_many(&self, keys: &[&String]) -> Result<(), KapeError> {
+        self.record(Event::RemoveMany(
+            self.name,
+            keys.iter().map(|key| (*key).clone()).collect(),
+        ));
+        if self.failures.contains("remove") {
+            return Err(KapeError::backend(TestError("remove failed")));
+        }
+        let mut entries = self.entries.lock().expect("entries mutex poisoned");
+        for key in keys {
+            entries.remove(*key);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct TestError(&'static str);
+
+impl fmt::Display for TestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for TestError {}
+
+#[test]
+fn reads_in_order_and_backfills_in_reverse_with_exact_ttl() {
+    block_on(async {
+        let events = events();
+        let hot = RecordingBackend::new("hot", Arc::clone(&events));
+        let warm = RecordingBackend::new("warm", Arc::clone(&events));
+        let cold = RecordingBackend::new("cold", Arc::clone(&events)).entry("key", "value", 750);
+        let cache = Cache::builder()
+            .backend("hot", hot)
+            .backend("warm", warm)
+            .backend("cold", cold)
+            .build()
+            .expect("cache should build");
+
+        let lookup = cache
+            .lookup(&"key".to_owned())
+            .await
+            .expect("lookup should succeed");
+        assert!(matches!(
+            lookup,
+            CacheLookup::Hit { ref value, ref backend, remaining_ttl: 750 }
+                if value.as_str() == "value" && backend.as_ref() == "cold"
+        ));
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::Get("hot", "key".to_owned()),
+                Event::Get("warm", "key".to_owned()),
+                Event::Get("cold", "key".to_owned()),
+                Event::Set("warm", "key".to_owned(), 750),
+                Event::Set("hot", "key".to_owned(), 750),
+            ]
+        );
+    });
+}
+
+#[test]
+fn first_hit_does_not_backfill_or_read_later_backends() {
+    block_on(async {
+        let events = events();
+        let hot = RecordingBackend::new("hot", Arc::clone(&events)).entry("key", "value", -1);
+        let cold = RecordingBackend::new("cold", Arc::clone(&events)).entry("key", "old", -1);
+        let cache = Cache::builder()
+            .backend("hot", hot)
+            .backend("cold", cold)
+            .build()
+            .expect("cache should build");
+
+        cache
+            .get(&"key".to_owned())
+            .await
+            .expect("lookup should succeed");
+        assert_eq!(take_events(&events), [Event::Get("hot", "key".to_owned())]);
+    });
+}
+
+#[test]
+fn mutations_run_in_reverse_and_stop_on_first_failure() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("hot", RecordingBackend::new("hot", Arc::clone(&events)))
+            .backend(
+                "warm",
+                RecordingBackend::new("warm", Arc::clone(&events)).failing_set(),
+            )
+            .backend("cold", RecordingBackend::new("cold", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .set(&"key".to_owned(), Arc::new("value".to_owned()), -1)
+            .await
+            .expect_err("middle failure should propagate");
+        assert_backend_failure(error, Operation::Set, "warm");
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::Set("cold", "key".to_owned(), -1),
+                Event::Set("warm", "key".to_owned(), -1),
+            ]
+        );
+    });
+}
+
+#[test]
+fn remove_and_clear_are_reverse_and_fail_fast() {
+    block_on(async {
+        let remove_events = events();
+        let remove_cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&remove_events)),
+            )
+            .backend(
+                "warm",
+                RecordingBackend::new("warm", Arc::clone(&remove_events)).failing_remove(),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&remove_events)),
+            )
+            .build()
+            .expect("cache should build");
+        let error = remove_cache
+            .remove(&"key".to_owned())
+            .await
+            .expect_err("remove failure should propagate");
+        assert_backend_failure(error, Operation::Remove, "warm");
+        assert_eq!(
+            take_events(&remove_events),
+            [
+                Event::Remove("cold", "key".to_owned()),
+                Event::Remove("warm", "key".to_owned()),
+            ]
+        );
+
+        let clear_events = events();
+        let clear_cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&clear_events)),
+            )
+            .backend(
+                "warm",
+                RecordingBackend::new("warm", Arc::clone(&clear_events)).failing_clear(),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&clear_events)),
+            )
+            .build()
+            .expect("cache should build");
+        let error = clear_cache
+            .clear()
+            .await
+            .expect_err("clear failure should propagate");
+        assert_backend_failure(error, Operation::Clear, "warm");
+        assert_eq!(
+            take_events(&clear_events),
+            [Event::Clear("cold"), Event::Clear("warm")]
+        );
+    });
+}
+
+#[test]
+fn read_and_backfill_failures_are_named_and_fail_fast() {
+    block_on(async {
+        let read_events = events();
+        let read_cache = Cache::builder()
+            .backend(
+                "broken",
+                RecordingBackend::new("broken", Arc::clone(&read_events)).failing_get(),
+            )
+            .backend(
+                "later",
+                RecordingBackend::new("later", Arc::clone(&read_events)).entry("key", "value", -1),
+            )
+            .build()
+            .expect("cache should build");
+        let error = read_cache
+            .get(&"key".to_owned())
+            .await
+            .expect_err("read failure should propagate");
+        assert_backend_failure(error, Operation::Get, "broken");
+        assert_eq!(
+            take_events(&read_events),
+            [Event::Get("broken", "key".to_owned())]
+        );
+
+        let backfill_events = events();
+        let backfill_cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&backfill_events)).failing_set(),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&backfill_events))
+                    .entry("key", "value", 400),
+            )
+            .build()
+            .expect("cache should build");
+        let error = backfill_cache
+            .get(&"key".to_owned())
+            .await
+            .expect_err("backfill failure should propagate");
+        assert_backend_failure(error, Operation::Backfill, "hot");
+    });
+}
+
+#[test]
+fn invalid_hit_is_a_named_get_failure_without_backfill() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend(
+                "invalid",
+                RecordingBackend::new("invalid", Arc::clone(&events)).entry("key", "value", 0),
+            )
+            .backend("later", RecordingBackend::new("later", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .lookup(&"key".to_owned())
+            .await
+            .expect_err("invalid hit must fail");
+        let failure = assert_backend_failure(error, Operation::Get, "invalid");
+        assert!(
+            failure
+                .source
+                .to_string()
+                .contains("invalid remaining TTL 0")
+        );
+        assert_eq!(
+            take_events(&events),
+            [Event::Get("invalid", "key".to_owned())]
+        );
+    });
+}
+
+#[test]
+fn get_or_load_has_strict_failure_and_zero_ttl_semantics() {
+    block_on(async {
+        let events = events();
+        let hot = RecordingBackend::new("hot", Arc::clone(&events));
+        let cold = RecordingBackend::new("cold", Arc::clone(&events));
+        let hot_handle = hot.clone();
+        let cold_handle = cold.clone();
+        let cache = Cache::builder()
+            .backend("hot", hot)
+            .backend("cold", cold)
+            .build()
+            .expect("cache should build");
+        let calls = AtomicUsize::new(0);
+
+        let value = cache
+            .get_or_load(
+                &"key".to_owned(),
+                || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, TestError>("loaded".to_owned())
+                },
+                0,
+            )
+            .await
+            .expect("zero TTL load should return value");
+        assert_eq!(value.as_str(), "loaded");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            hot_handle.get(&"key".to_owned()).await.expect("hot read"),
+            Lookup::Miss
+        ));
+        assert!(matches!(
+            cold_handle.get(&"key".to_owned()).await.expect("cold read"),
+            Lookup::Miss
+        ));
+    });
+}
+
+#[test]
+fn get_or_load_distinguishes_loader_and_write_failures() {
+    block_on(async {
+        let loader_events = events();
+        let loader_cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", loader_events))
+            .build()
+            .expect("cache should build");
+        let error = loader_cache
+            .get_or_load(
+                &"key".to_owned(),
+                || async { Err::<String, _>(TestError("loader failed")) },
+                -1,
+            )
+            .await
+            .expect_err("loader failure should propagate");
+        assert!(matches!(error, KapeError::Loader { .. }));
+
+        let write_events = events();
+        let write_cache = Cache::builder()
+            .backend(
+                "broken",
+                RecordingBackend::new("broken", write_events).failing_set(),
+            )
+            .build()
+            .expect("cache should build");
+        let error = write_cache
+            .get_or_load(
+                &"key".to_owned(),
+                || async { Ok::<_, TestError>("loaded".to_owned()) },
+                -1,
+            )
+            .await
+            .expect_err("write failure should propagate");
+        assert_backend_failure(error, Operation::Set, "broken");
+    });
+}
+
+#[test]
+fn wrap_derives_ttl_from_the_loaded_value_only_on_miss() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+        let loader_calls = AtomicUsize::new(0);
+        let ttl_calls = AtomicUsize::new(0);
+        let key = "profile".to_owned();
+
+        let loaded = cache
+            .wrap(
+                &key,
+                || async {
+                    loader_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, TestError>("premium".to_owned())
+                },
+                |value| {
+                    ttl_calls.fetch_add(1, Ordering::SeqCst);
+                    if value == "premium" { 300_000 } else { 60_000 }
+                },
+            )
+            .await
+            .expect("wrap should load and write");
+        assert_eq!(loaded.as_str(), "premium");
+        assert_eq!(loader_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(ttl_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::Get("only", key.clone()),
+                Event::Set("only", key.clone(), 300_000),
+            ]
+        );
+
+        let hit = cache
+            .wrap(
+                &key,
+                || async {
+                    panic!("loader must not run on hit");
+                    #[allow(unreachable_code)]
+                    Ok::<String, TestError>(String::new())
+                },
+                |_| panic!("TTL selector must not run on hit"),
+            )
+            .await
+            .expect("wrap hit should succeed");
+        assert_eq!(hit.as_str(), "premium");
+        assert_eq!(
+            take_events(&events),
+            [Event::Get("only", "profile".to_owned())]
+        );
+    });
+}
+
+#[test]
+fn wrap_rejects_an_invalid_derived_ttl_before_writing() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("hot", RecordingBackend::new("hot", Arc::clone(&events)))
+            .backend("cold", RecordingBackend::new("cold", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .wrap(
+                &"key".to_owned(),
+                || async { Ok::<_, TestError>("loaded".to_owned()) },
+                |value| {
+                    assert_eq!(value, "loaded");
+                    -2
+                },
+            )
+            .await
+            .expect_err("invalid derived TTL must fail");
+
+        assert!(matches!(error, KapeError::InvalidTtl(-2)));
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::Get("hot", "key".to_owned()),
+                Event::Get("cold", "key".to_owned()),
+            ]
+        );
+    });
+}
+
+#[test]
+fn wrap_zero_ttl_invalidates_the_chain_and_preserves_failure_names() {
+    block_on(async {
+        let zero_events = events();
+        let zero_cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&zero_events)),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&zero_events)),
+            )
+            .build()
+            .expect("cache should build");
+        let loaded = zero_cache
+            .wrap(
+                &"key".to_owned(),
+                || async { Ok::<_, TestError>("loaded".to_owned()) },
+                |_| 0,
+            )
+            .await
+            .expect("zero TTL wrap should invalidate and return the value");
+        assert_eq!(loaded.as_str(), "loaded");
+        assert_eq!(
+            take_events(&zero_events),
+            [
+                Event::Get("hot", "key".to_owned()),
+                Event::Get("cold", "key".to_owned()),
+                Event::Set("cold", "key".to_owned(), 0),
+                Event::Set("hot", "key".to_owned(), 0),
+            ]
+        );
+
+        let loader_events = events();
+        let loader_cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", loader_events))
+            .build()
+            .expect("cache should build");
+        let ttl_calls = AtomicUsize::new(0);
+        let error = loader_cache
+            .wrap(
+                &"key".to_owned(),
+                || async { Err::<String, _>(TestError("loader failed")) },
+                |_| {
+                    ttl_calls.fetch_add(1, Ordering::SeqCst);
+                    -1
+                },
+            )
+            .await
+            .expect_err("loader failure should propagate");
+        assert!(matches!(error, KapeError::Loader { .. }));
+        assert_eq!(ttl_calls.load(Ordering::SeqCst), 0);
+
+        let write_events = events();
+        let write_cache = Cache::builder()
+            .backend(
+                "broken",
+                RecordingBackend::new("broken", write_events).failing_set(),
+            )
+            .build()
+            .expect("cache should build");
+        let error = write_cache
+            .wrap(
+                &"key".to_owned(),
+                || async { Ok::<_, TestError>("loaded".to_owned()) },
+                |_| -1,
+            )
+            .await
+            .expect_err("write failure should propagate");
+        assert_backend_failure(error, Operation::Set, "broken");
+    });
+}
+
+#[test]
+fn batch_preserves_positions_duplicates_and_backfills_each_hit() {
+    block_on(async {
+        let events = events();
+        let hot = RecordingBackend::new("hot", Arc::clone(&events));
+        let cold = RecordingBackend::new("cold", Arc::clone(&events))
+            .entry("a", "A", 500)
+            .entry("b", "B", -1);
+        let cache = Cache::builder()
+            .backend("hot", hot)
+            .backend("cold", cold)
+            .build()
+            .expect("cache should build");
+        let keys = [
+            "a".to_owned(),
+            "missing".to_owned(),
+            "a".to_owned(),
+            "b".to_owned(),
+        ];
+
+        let values = cache
+            .get_many(&keys)
+            .await
+            .expect("batch lookup should succeed");
+        assert_eq!(
+            values
+                .iter()
+                .map(|value| value.as_deref().map(String::as_str))
+                .collect::<Vec<_>>(),
+            [Some("A"), None, Some("A"), Some("B")]
+        );
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", keys.to_vec()),
+                Event::GetMany("cold", keys.to_vec()),
+                Event::Set("hot", "a".to_owned(), 500),
+                Event::Set("hot", "a".to_owned(), 500),
+                Event::Set("hot", "b".to_owned(), -1),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_mutations_are_reverse_and_preserve_item_order() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("hot", RecordingBackend::new("hot", Arc::clone(&events)))
+            .backend("cold", RecordingBackend::new("cold", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+        let items = [
+            SetItem::new("a".to_owned(), "A".to_owned(), -1),
+            SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+        ];
+
+        cache
+            .set_many(&items)
+            .await
+            .expect("batch set should succeed");
+        cache
+            .remove_many(&["a".to_owned(), "a".to_owned()])
+            .await
+            .expect("batch remove should succeed");
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::SetMany("cold", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
+                Event::SetMany("hot", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
+                Event::RemoveMany("cold", vec!["a".to_owned(), "a".to_owned()]),
+                Event::RemoveMany("hot", vec!["a".to_owned(), "a".to_owned()]),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_contract_failures_return_err_without_partial_results() {
+    block_on(async {
+        let length_events = events();
+        let length_cache = Cache::builder()
+            .backend(
+                "broken",
+                RecordingBackend::new("broken", length_events).wrong_batch_len(),
+            )
+            .build()
+            .expect("cache should build");
+        let error = length_cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect_err("wrong batch length must fail");
+        assert_backend_failure(error, Operation::Get, "broken");
+
+        let backfill_events = events();
+        let backfill_cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&backfill_events)).failing_set(),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&backfill_events))
+                    .entry("a", "A", 100)
+                    .entry("b", "B", 200),
+            )
+            .build()
+            .expect("cache should build");
+        let error = backfill_cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect_err("one backfill failure must fail the batch");
+        assert_backend_failure(error, Operation::Backfill, "hot");
+        assert_eq!(
+            take_events(&backfill_events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["a".to_owned(), "b".to_owned()]),
+                Event::Set("hot", "a".to_owned(), 100),
+            ]
+        );
+    });
+}
+
+#[test]
+fn empty_batches_do_not_call_backends() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+
+        assert!(
+            cache
+                .lookup_many(&[])
+                .await
+                .expect("empty lookup")
+                .is_empty()
+        );
+        assert!(cache.get_many(&[]).await.expect("empty get").is_empty());
+        cache.set_many(&[]).await.expect("empty set");
+        cache.remove_many(&[]).await.expect("empty remove");
+        assert!(take_events(&events).is_empty());
+    });
+}
+
+fn events() -> Arc<Mutex<Vec<Event>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn take_events(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
+    std::mem::take(&mut *events.lock().expect("events mutex poisoned"))
+}
+
+fn assert_backend_failure(error: KapeError, operation: Operation, backend: &str) -> BackendFailure {
+    let KapeError::Backend(failure) = error else {
+        panic!("expected named backend failure")
+    };
+    assert_eq!(failure.operation, operation);
+    assert_eq!(failure.backend.as_ref(), backend);
+    failure
+}
