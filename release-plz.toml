@@ -1,13 +1,8 @@
 [workspace]
 features_always_increment_minor = true
 release_always = false
-release = false
 pr_labels = ["release"]
 changelog_update = false
-
-[[package]]
-name = "kape-testkit"
-release = true
 
 [changelog]
 protect_breaking_commits = true
