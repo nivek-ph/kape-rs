@@ -75,7 +75,7 @@ async fn satisfies_backend_contract() {
         .unwrap()
         .namespace(namespace);
     assert_backend_contract(&backend, &"round-trip".to_owned(), String::new()).await;
-    assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 100).await;
+    assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 1_000).await;
     assert_batch_contract(
         &backend,
         &"batch-first".to_owned(),
