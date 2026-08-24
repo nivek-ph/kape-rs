@@ -1,7 +1,7 @@
 use std::{env, error::Error, sync::Arc};
 
 use dotenv::dotenv;
-use kape::{Cache, CacheBackend, CacheLookup};
+use kape::{Cache, CacheBackend};
 use kape_memory::MemoryBackend;
 use kape_postgres::PostgresBackend;
 use kape_redis::RedisBackend;
@@ -36,22 +36,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .backend("postgres", postgres)
         .build()?;
 
-    let CacheLookup::Hit {
-        value,
-        backend,
-        remaining_ttl,
-    } = cache.lookup(&key).await?
-    else {
+    let Some(hit) = cache.lookup(&key).await? else {
         panic!("the seeded PostgreSQL value must be found");
     };
-    assert_eq!(backend.as_ref(), "postgres");
-    println!("first lookup: {backend} hit {value}, {remaining_ttl}ms remaining");
+    assert_eq!(hit.backend.as_ref(), "postgres");
+    println!(
+        "first lookup: {} hit {}, {}ms remaining",
+        hit.backend, hit.entry.value, hit.entry.remaining_ttl
+    );
 
-    let CacheLookup::Hit { backend, .. } = cache.lookup(&key).await? else {
+    let Some(hit) = cache.lookup(&key).await? else {
         panic!("the backfilled value must be found");
     };
-    assert_eq!(backend.as_ref(), "memory");
-    println!("second lookup after backfill: {backend} hit");
+    assert_eq!(hit.backend.as_ref(), "memory");
+    println!("second lookup after backfill: {} hit", hit.backend);
 
     cache.clear().await?;
     drop(cache);

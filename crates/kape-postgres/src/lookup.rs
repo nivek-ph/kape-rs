@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kape::{CacheEntry, Lookup};
+use kape::CacheEntry;
 
 use crate::{PostgresBackendError, PostgresCodec};
 
@@ -8,20 +8,20 @@ pub(crate) fn decode_lookup<K, V, C>(
     codec: &C,
     value: Option<C::EncodedValue>,
     remaining_ms: Option<i64>,
-) -> Result<Lookup<V>, PostgresBackendError>
+) -> Result<Option<CacheEntry<V>>, PostgresBackendError>
 where
     C: PostgresCodec<K, V>,
 {
     let Some(value) = value else {
-        return Ok(Lookup::Miss);
+        return Ok(None);
     };
     let remaining_ttl = match remaining_ms {
         None => -1,
         Some(remaining) if remaining > 0 => remaining,
-        Some(_) => return Ok(Lookup::Miss),
+        Some(_) => return Ok(None),
     };
     let value = Arc::new(codec.decode_value(value)?);
-    Ok(Lookup::Hit(CacheEntry::new(value, remaining_ttl)))
+    Ok(Some(CacheEntry::new(value, remaining_ttl)))
 }
 
 #[cfg(test)]
@@ -35,19 +35,19 @@ mod tests {
         let text = "value".to_owned();
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(text.clone()), None).unwrap(),
-            Lookup::Hit(entry) if entry.remaining_ttl == -1
+            Some(entry) if entry.remaining_ttl == -1
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(text.clone()), Some(1)).unwrap(),
-            Lookup::Hit(entry) if entry.remaining_ttl == 1
+            Some(entry) if entry.remaining_ttl == 1
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(text.clone()), Some(0)).unwrap(),
-            Lookup::Miss
+            None
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(text), Some(-1)).unwrap(),
-            Lookup::Miss
+            None
         ));
     }
 }

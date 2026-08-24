@@ -9,8 +9,7 @@ use std::{
 
 use futures_lite::future::block_on;
 use kape::{
-    BackendFailure, Cache, CacheBackend, CacheEntry, CacheLookup, KapeError, Lookup, Operation,
-    SetItem,
+    BackendFailure, Cache, CacheBackend, CacheEntry, CacheHit, KapeError, Operation, SetItem,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,7 +86,7 @@ impl RecordingBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for RecordingBackend {
-    async fn get(&self, key: &String) -> Result<Lookup<String>, KapeError> {
+    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
         self.record(Event::Get(self.name, key.clone()));
         if self.failures.contains("get") {
             return Err(KapeError::backend(TestError("get failed")));
@@ -97,8 +96,7 @@ impl CacheBackend<String, String> for RecordingBackend {
             .lock()
             .expect("entries mutex poisoned")
             .get(key)
-            .cloned()
-            .map_or(Lookup::Miss, Lookup::Hit))
+            .cloned())
     }
 
     async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
@@ -136,7 +134,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&String]) -> Result<Vec<Lookup<String>>, KapeError> {
+    async fn get_many(&self, keys: &[&String]) -> Result<Vec<Option<CacheEntry<String>>>, KapeError> {
         self.record(Event::GetMany(
             self.name,
             keys.iter().map(|key| (*key).clone()).collect(),
@@ -147,7 +145,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         let entries = self.entries.lock().expect("entries mutex poisoned");
         let mut results = keys
             .iter()
-            .map(|key| entries.get(*key).cloned().map_or(Lookup::Miss, Lookup::Hit))
+            .map(|key| entries.get(*key).cloned())
             .collect::<Vec<_>>();
         if self.wrong_batch_len {
             results.pop();
@@ -227,8 +225,13 @@ fn reads_in_order_and_backfills_in_reverse_with_exact_ttl() {
             .expect("lookup should succeed");
         assert!(matches!(
             lookup,
-            CacheLookup::Hit { ref value, ref backend, remaining_ttl: 750 }
-                if value.as_str() == "value" && backend.as_ref() == "cold"
+            Some(CacheHit {
+                ref backend,
+                entry: CacheEntry {
+                    ref value,
+                    remaining_ttl: 750,
+                },
+            }) if value.as_str() == "value" && backend.as_ref() == "cold"
         ));
         assert_eq!(
             take_events(&events),
@@ -457,14 +460,20 @@ fn get_or_load_has_strict_failure_and_zero_ttl_semantics() {
             .expect("zero TTL load should return value");
         assert_eq!(value.as_str(), "loaded");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            hot_handle.get(&"key".to_owned()).await.expect("hot read"),
-            Lookup::Miss
-        ));
-        assert!(matches!(
-            cold_handle.get(&"key".to_owned()).await.expect("cold read"),
-            Lookup::Miss
-        ));
+        assert!(
+            hot_handle
+                .get(&"key".to_owned())
+                .await
+                .expect("hot read")
+                .is_none()
+        );
+        assert!(
+            cold_handle
+                .get(&"key".to_owned())
+                .await
+                .expect("cold read")
+                .is_none()
+        );
     });
 }
 

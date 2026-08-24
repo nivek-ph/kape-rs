@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use kape::{CacheBackend, CacheEntry, KapeError, Lookup, SetItem};
+use kape::{CacheBackend, CacheEntry, KapeError, SetItem};
 
 #[derive(Default)]
 struct ScalarBackend {
@@ -13,16 +13,14 @@ struct ScalarBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for ScalarBackend {
-    async fn get(&self, key: &String) -> Result<Lookup<String>, KapeError> {
+    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
         Ok(self
             .entries
             .lock()
             .expect("entries mutex poisoned")
             .get(key)
             .cloned()
-            .map_or(Lookup::Miss, |value| {
-                Lookup::Hit(CacheEntry::new(value, -1))
-            }))
+            .map(|value| CacheEntry::new(value, -1)))
     }
 
     async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
@@ -68,11 +66,11 @@ fn default_batch_is_sequential_and_retains_earlier_effects() {
 
         assert!(matches!(
             backend.get(&"first".to_owned()).await.unwrap(),
-            Lookup::Hit(_)
+            Some(_)
         ));
         assert!(matches!(
             backend.get(&"later".to_owned()).await.unwrap(),
-            Lookup::Miss
+            None
         ));
     });
 }

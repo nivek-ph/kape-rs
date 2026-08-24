@@ -11,12 +11,12 @@ adapter-local.
 
 ## Custom backends
 
-Implement `CacheBackend<K, V>` and return structural `Lookup::Miss` or
-`Lookup::Hit(CacheEntry)`. A hit must report `-1` or a positive exact remaining
-TTL. Scalar and batch writes must reject TTL below `-1` before mutation; TTL
-zero must leave no observable entry. Batch reads preserve input length, order,
-and duplicates. `clear` must affect only the backend's documented ownership
-scope.
+Implement `CacheBackend<K, V>` and return `None` for a miss or
+`Some(CacheEntry)` for a hit. A hit must report `-1` or a positive exact
+remaining TTL. Scalar and batch writes must reject TTL below `-1` before
+mutation; TTL zero must leave no observable entry. Batch reads preserve input
+length, order, and duplicates. `clear` must affect only the backend's documented
+ownership scope.
 
 The shared testkit exercises these observable guarantees. Adapter-local native
 batches may reduce transport round trips, but cannot change public semantics.

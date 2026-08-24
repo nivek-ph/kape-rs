@@ -13,7 +13,7 @@ reverse configured order. All failures are fail-fast.
 
 ```rust
 use std::sync::Arc;
-use kape::{Cache, CacheBackend, CacheLookup, SetItem};
+use kape::{Cache, CacheBackend, SetItem};
 
 async fn example<B>(hot: B, shared: B) -> Result<(), kape::KapeError>
 where
@@ -27,12 +27,12 @@ where
     let key = "user:42".to_owned();
     cache.set(&key, Arc::new("Ada".to_owned()), 60_000).await?;
     match cache.lookup(&key).await? {
-        CacheLookup::Hit { value, backend, remaining_ttl } => {
-            assert_eq!(value.as_str(), "Ada");
-            assert!(!backend.is_empty());
-            assert!(remaining_ttl == -1 || remaining_ttl > 0);
+        Some(hit) => {
+            assert_eq!(hit.entry.value.as_str(), "Ada");
+            assert!(!hit.backend.is_empty());
+            assert!(hit.entry.remaining_ttl == -1 || hit.entry.remaining_ttl > 0);
         }
-        CacheLookup::Miss => {}
+        None => {}
     }
 
     cache.set_many(&[

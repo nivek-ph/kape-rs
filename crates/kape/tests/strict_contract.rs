@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use kape::{Cache, CacheBackend, CacheEntry, KapeError, Lookup};
+use kape::{Cache, CacheBackend, CacheEntry, KapeError};
 
 type Entries = Arc<Mutex<HashMap<String, (Arc<String>, i64)>>>;
 
@@ -15,15 +15,13 @@ struct TestBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for TestBackend {
-    async fn get(&self, key: &String) -> Result<Lookup<String>, KapeError> {
+    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
         Ok(self
             .entries
             .lock()
             .expect("test backend mutex poisoned")
             .get(key)
-            .map_or(Lookup::Miss, |(value, remaining_ttl)| {
-                Lookup::Hit(CacheEntry::new(Arc::clone(value), *remaining_ttl))
-            }))
+            .map(|(value, remaining_ttl)| CacheEntry::new(Arc::clone(value), *remaining_ttl)))
     }
 
     async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
@@ -108,7 +106,7 @@ fn single_backend_scalar_contract() {
                 .get(&key)
                 .await
                 .expect("backend read should succeed"),
-            Lookup::Miss
+            None
         ));
 
         cache.remove(&key).await.expect("remove should succeed");

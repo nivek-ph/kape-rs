@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, KapeError, Lookup, SetItem};
+use kape::{CacheBackend, CacheEntry, KapeError, SetItem};
 use sqlx::{AssertSqlSafe, PgPool, Postgres, Row, Transaction};
 
 use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec};
@@ -125,7 +125,7 @@ where
     V: Send + Sync,
     C: PostgresCodec<K, V>,
 {
-    async fn get(&self, key: &K) -> Result<Lookup<V>, KapeError> {
+    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
         let key = self.encode_key(key)?;
         let statement = format!(
             "SELECT value, CASE WHEN expires_at_ms IS NULL THEN NULL \
@@ -139,7 +139,7 @@ where
             .await
             .map_err(PostgresBackendError::Sqlx)?
         else {
-            return Ok(Lookup::Miss);
+            return Ok(None);
         };
         let value: C::EncodedValue = row.try_get("value").map_err(PostgresBackendError::Sqlx)?;
         let remaining_ms: Option<i64> = row
@@ -178,7 +178,7 @@ where
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Lookup<V>>, KapeError> {
+    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Option<CacheEntry<V>>>, KapeError> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }

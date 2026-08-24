@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kape::{CacheEntry, Lookup};
+use kape::CacheEntry;
 
 use crate::{RedisBackendError, RedisCodec};
 
@@ -8,33 +8,33 @@ pub(crate) fn decode_lookup<K, V, C>(
     codec: &C,
     bytes: Option<&[u8]>,
     pttl: i64,
-) -> Result<Lookup<V>, RedisBackendError>
+) -> Result<Option<CacheEntry<V>>, RedisBackendError>
 where
     C: RedisCodec<K, V>,
 {
     let Some(bytes) = bytes else {
-        return Ok(Lookup::Miss);
+        return Ok(None);
     };
     let remaining_ttl = match pttl {
-        -2 | 0 => return Ok(Lookup::Miss),
+        -2 | 0 => return Ok(None),
         -1 => -1,
         value if value > 0 => value,
         value => return Err(RedisBackendError::InvalidPttl(value)),
     };
     let value = Arc::new(codec.decode_value(bytes)?);
-    Ok(Lookup::Hit(CacheEntry::new(value, remaining_ttl)))
+    Ok(Some(CacheEntry::new(value, remaining_ttl)))
 }
 
 pub(crate) fn decode_pair<K, V, C>(
     codec: &C,
     value: &redis::Value,
     pttl: &redis::Value,
-) -> Result<Lookup<V>, RedisBackendError>
+) -> Result<Option<CacheEntry<V>>, RedisBackendError>
 where
     C: RedisCodec<K, V>,
 {
     let bytes = match value {
-        redis::Value::Nil => return Ok(Lookup::Miss),
+        redis::Value::Nil => return Ok(None),
         redis::Value::BulkString(bytes) => Some(bytes.as_slice()),
         _ => {
             return Err(RedisBackendError::InvalidBatchResponse(
@@ -62,19 +62,19 @@ mod tests {
 
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), -2).unwrap(),
-            Lookup::Miss
+            None
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), -1).unwrap(),
-            Lookup::Hit(entry) if entry.remaining_ttl == -1
+            Some(entry) if entry.remaining_ttl == -1
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), 1).unwrap(),
-            Lookup::Hit(entry) if entry.remaining_ttl == 1
+            Some(entry) if entry.remaining_ttl == 1
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), 0).unwrap(),
-            Lookup::Miss
+            None
         ));
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), -3),
@@ -92,7 +92,7 @@ mod tests {
                 &redis::Value::BulkString(b"invalid".to_vec()),
             )
             .unwrap(),
-            Lookup::Miss
+            None
         ));
     }
 }

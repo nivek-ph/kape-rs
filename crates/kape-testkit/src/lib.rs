@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use kape::{CacheBackend, KapeError, Lookup, SetItem};
+use kape::{CacheBackend, KapeError, SetItem};
 use tokio::time::sleep;
 
 /// Returns a 16-character alphanumeric string from OS-seeded hasher state.
@@ -44,7 +44,7 @@ where
         .expect("contract setup remove failed");
     assert!(matches!(
         backend.get(key).await.expect("contract miss read failed"),
-        Lookup::Miss
+        None
     ));
 
     let expected = Arc::new(value);
@@ -57,11 +57,11 @@ where
         .await
         .expect("contract immortal read failed")
     {
-        Lookup::Hit(entry) => {
+        Some(entry) => {
             assert_eq!(entry.value.as_ref(), expected.as_ref());
             assert_eq!(entry.remaining_ttl, -1);
         }
-        other @ Lookup::Miss => panic!("expected immortal hit, got {other:?}"),
+        None => panic!("expected immortal hit, got a miss"),
     }
 
     assert!(matches!(
@@ -70,7 +70,7 @@ where
     ));
     assert!(matches!(
         backend.get(key).await.expect("invalid TTL changed value"),
-        Lookup::Hit(entry) if entry.value == expected && entry.remaining_ttl == -1
+        Some(entry) if entry.value == expected && entry.remaining_ttl == -1
     ));
 
     backend
@@ -82,7 +82,7 @@ where
             .get(key)
             .await
             .expect("contract zero-TTL read failed"),
-        Lookup::Miss
+        None
     ));
 
     backend
@@ -95,7 +95,7 @@ where
             .get(key)
             .await
             .expect("contract post-remove read failed"),
-        Lookup::Miss
+        None
     ));
 }
 
@@ -121,14 +121,14 @@ where
         .await
         .expect("contract expiring read failed")
     {
-        Lookup::Hit(entry) => {
+        Some(entry) => {
             assert!(entry.remaining_ttl > 0, "remaining TTL must be positive");
             assert!(
                 entry.remaining_ttl <= ttl_ms,
                 "remaining TTL exceeds requested TTL"
             );
         }
-        other @ Lookup::Miss => panic!("expected expiring hit, got {other:?}"),
+        None => panic!("expected expiring hit, got a miss"),
     }
 
     let wait_ms = u64::try_from(ttl_ms).expect("positive TTL must fit u64") + 25;
@@ -138,7 +138,7 @@ where
             .get(key)
             .await
             .expect("contract expired read failed"),
-        Lookup::Miss
+        None
     ));
 }
 
@@ -181,10 +181,10 @@ pub async fn assert_batch_contract<B, K, V>(
         .await
         .expect("batch contract read failed");
     assert_eq!(results.len(), read_keys.len());
-    assert!(matches!(&results[0], Lookup::Hit(entry) if entry.value == first_value));
-    assert!(matches!(&results[1], Lookup::Miss));
-    assert!(matches!(&results[2], Lookup::Hit(entry) if entry.value == first_value));
-    assert!(matches!(&results[3], Lookup::Hit(entry) if entry.value == second_value));
+    assert!(matches!(&results[0], Some(entry) if entry.value == first_value));
+    assert!(matches!(&results[1], None));
+    assert!(matches!(&results[2], Some(entry) if entry.value == first_value));
+    assert!(matches!(&results[3], Some(entry) if entry.value == second_value));
 
     assert!(matches!(
         backend
@@ -205,14 +205,14 @@ pub async fn assert_batch_contract<B, K, V>(
             .get(first_key)
             .await
             .expect("batch zero-TTL read failed"),
-        Lookup::Miss
+        None
     ));
     assert!(matches!(
         backend
             .get(second_key)
             .await
             .expect("batch zero-TTL changed another key"),
-        Lookup::Hit(_)
+        Some(_)
     ));
 
     backend
@@ -225,7 +225,7 @@ pub async fn assert_batch_contract<B, K, V>(
             .await
             .expect("batch contract post-remove read failed")
             .iter()
-            .all(|lookup| matches!(lookup, Lookup::Miss))
+            .all(Option::is_none)
     );
 
     assert!(
@@ -276,6 +276,6 @@ pub async fn assert_clear_contract<B, K, V>(
             .await
             .expect("contract post-clear read failed")
             .iter()
-            .all(|lookup| matches!(lookup, Lookup::Miss))
+            .all(Option::is_none)
     );
 }

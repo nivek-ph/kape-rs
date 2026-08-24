@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use kape::{Cache, CacheBackend, KapeError, Lookup, Operation};
+use kape::{Cache, CacheBackend, KapeError, Operation};
 use kape_redis::{RedisBackend, RedisBackendError, RedisCodec, StringCodec};
 use kape_testkit::{
     assert_backend_contract, assert_batch_contract, assert_clear_contract, assert_expiring_contract,
@@ -111,7 +111,7 @@ async fn satisfies_backend_contract() {
     backend.clear().await.expect("namespace clear failed");
     assert!(matches!(
         protected.get(&"protected".to_owned()).await.unwrap(),
-        Lookup::Hit(_)
+        Some(_)
     ));
     protected.clear().await.expect("protected cleanup failed");
 

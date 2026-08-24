@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kape::{Cache, CacheBackend, CacheEntry, KapeError, Lookup};
+use kape::{Cache, CacheBackend, CacheEntry, KapeError};
 use kape_testkit::get_random_string;
 
 #[derive(Clone, Default)]
@@ -30,10 +30,10 @@ impl CustomBackend {
 
 #[async_trait]
 impl CacheBackend<String, String> for CustomBackend {
-    async fn get(&self, key: &String) -> Result<Lookup<String>, KapeError> {
+    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
         let mut entries = self.entries()?;
         let Some(entry) = entries.get(key).cloned() else {
-            return Ok(Lookup::Miss);
+            return Ok(None);
         };
         let now = Instant::now();
         let remaining_ttl = match entry.expires_at {
@@ -45,16 +45,16 @@ impl CacheBackend<String, String> for CustomBackend {
                 };
                 if millis == 0 {
                     entries.remove(key);
-                    return Ok(Lookup::Miss);
+                    return Ok(None);
                 }
                 millis
             }
             Some(_) => {
                 entries.remove(key);
-                return Ok(Lookup::Miss);
+                return Ok(None);
             }
         };
-        Ok(Lookup::Hit(CacheEntry::new(entry.value, remaining_ttl)))
+        Ok(Some(CacheEntry::new(entry.value, remaining_ttl)))
     }
 
     async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {

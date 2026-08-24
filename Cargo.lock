@@ -794,11 +794,11 @@ name = "kape-memory"
 version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
- "futures-lite",
  "kape",
  "kape-testkit",
  "moka",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

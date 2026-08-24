@@ -16,7 +16,7 @@ kape::Cache<K, V>
     +-- kape-postgres    PostgresCodec<K, V>
 ```
 
-The core owns `CacheBackend<K, V>`, structural `Lookup`, backend naming,
+The core owns `CacheBackend<K, V>`, backend naming,
 ordering, validation, and error context. It has no async-runtime, storage, or
 serialization dependency.
 

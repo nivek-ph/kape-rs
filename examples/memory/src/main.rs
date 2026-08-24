@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use kape::{Cache, CacheBackend, CacheLookup};
+use kape::{Cache, CacheBackend};
 use kape_memory::MemoryBackend;
 use kape_testkit::get_random_string;
 
@@ -20,12 +20,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
 
     match cache.lookup(&key).await? {
-        CacheLookup::Hit {
-            value,
-            backend,
-            remaining_ttl,
-        } => println!("{backend} hit: {value}, {remaining_ttl}ms remaining"),
-        CacheLookup::Miss => println!("miss"),
+        Some(hit) => println!(
+            "{} hit: {}, {}ms remaining",
+            hit.backend, hit.entry.value, hit.entry.remaining_ttl
+        ),
+        None => println!("miss"),
     }
 
     let load_key = get_random_string();

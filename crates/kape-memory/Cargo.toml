@@ -20,7 +20,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 kape-testkit.workspace = true
-futures-lite.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

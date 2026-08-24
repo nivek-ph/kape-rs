@@ -1,8 +1,7 @@
 use std::{collections::HashSet, fmt, future::Future, sync::Arc};
 
 use crate::{
-    BackendFailure, CacheBackend, CacheEntry, KapeError as Error, Lookup, Operation, SetItem,
-    write::validate_ttl,
+    BackendFailure, CacheBackend, KapeError as Error, Operation, SetItem, write::validate_ttl,
 };
 
 struct CacheLayer<K, V> {
@@ -15,37 +14,40 @@ struct CacheInner<K, V> {
     backend_names: Box<[Arc<str>]>,
 }
 
-/// The structural result of querying the full cache chain.
+/// A typed cache value together with its exact observed remaining lifetime.
 #[derive(Clone, Debug)]
-pub enum CacheLookup<V> {
-    /// Every configured backend instance missed.
-    Miss,
-    /// A backend instance returned a fresh value.
-    Hit {
-        /// Shared cached value.
-        value: Arc<V>,
-        /// Name of the backend instance that returned the value.
-        backend: Arc<str>,
-        /// Exact remaining lifetime in milliseconds; `-1` means no expiry.
-        remaining_ttl: i64,
-    },
+pub struct CacheEntry<V> {
+    /// The shared cached value.
+    pub value: Arc<V>,
+
+    /// Exact remaining lifetime in milliseconds; `-1` means no expiry.
+    pub remaining_ttl: i64,
 }
 
-impl<V> CacheLookup<V> {
-    /// Returns the contained value when this lookup is a Hit.
+impl<V> CacheEntry<V> {
+    /// Creates a cache entry from a shared value and exact remaining TTL.
     #[must_use]
-    pub const fn value(&self) -> Option<&Arc<V>> {
-        match self {
-            Self::Miss => None,
-            Self::Hit { value, .. } => Some(value),
+    pub const fn new(value: Arc<V>, remaining_ttl: i64) -> Self {
+        Self {
+            value,
+            remaining_ttl,
         }
     }
+}
 
-    fn into_value(self) -> Option<Arc<V>> {
-        match self {
-            Self::Miss => None,
-            Self::Hit { value, .. } => Some(value),
-        }
+/// An entry found in the cache chain together with its source backend.
+#[derive(Clone, Debug)]
+pub struct CacheHit<V> {
+    /// Name of the backend instance that returned the entry.
+    pub backend: Arc<str>,
+
+    /// The entry returned by the backend.
+    pub entry: CacheEntry<V>,
+}
+
+impl<V> CacheHit<V> {
+    fn into_value(self) -> Arc<V> {
+        self.entry.value
     }
 }
 
@@ -84,27 +86,23 @@ where
     /// # Errors
     ///
     /// Returns the first named read, contract, or backfill failure.
-    pub async fn lookup(&self, key: &K) -> Result<CacheLookup<V>, Error> {
+    pub async fn lookup(&self, key: &K) -> Result<Option<CacheHit<V>>, Error> {
         for (index, layer) in self.inner.layers.iter().enumerate() {
-            let lookup = layer
+            let entry = layer
                 .backend
                 .get(key)
                 .await
-                .map_err(|source| named_failure(Operation::Get, layer, source))?;
-            match lookup {
-                Lookup::Miss => {}
-                Lookup::Hit(entry) => {
-                    let entry = validate_hit(layer, entry)?;
-                    self.backfill(key, &entry, index).await?;
-                    return Ok(CacheLookup::Hit {
-                        value: entry.value,
-                        backend: Arc::clone(&layer.name),
-                        remaining_ttl: entry.remaining_ttl,
-                    });
-                }
+                .map_err(|source| backend_error(Operation::Get, layer, source))?;
+            if let Some(entry) = entry {
+                let entry = validate_hit(layer, entry)?;
+                self.backfill(key, &entry, index).await?;
+                return Ok(Some(CacheHit {
+                    entry,
+                    backend: Arc::clone(&layer.name),
+                }));
             }
         }
-        Ok(CacheLookup::Miss)
+        Ok(None)
     }
 
     /// Reads a cached value, discarding lookup metadata.
@@ -113,7 +111,7 @@ where
     ///
     /// Returns the same failures as [`Self::lookup`].
     pub async fn get(&self, key: &K) -> Result<Option<Arc<V>>, Error> {
-        Ok(self.lookup(key).await?.into_value())
+        Ok(self.lookup(key).await?.map(CacheHit::into_value))
     }
 
     /// Writes every backend instance in reverse configured order.
@@ -128,7 +126,7 @@ where
                 .backend
                 .set(key, Arc::clone(&value), ttl)
                 .await
-                .map_err(|source| named_failure(Operation::Set, layer, source))?;
+                .map_err(|source| backend_error(Operation::Set, layer, source))?;
         }
         Ok(())
     }
@@ -144,7 +142,7 @@ where
                 .backend
                 .remove(key)
                 .await
-                .map_err(|source| named_failure(Operation::Remove, layer, source))?;
+                .map_err(|source| backend_error(Operation::Remove, layer, source))?;
         }
         Ok(())
     }
@@ -160,7 +158,7 @@ where
                 .backend
                 .clear()
                 .await
-                .map_err(|source| named_failure(Operation::Clear, layer, source))?;
+                .map_err(|source| backend_error(Operation::Clear, layer, source))?;
         }
         Ok(())
     }
@@ -222,20 +220,18 @@ where
     /// # Errors
     ///
     /// Returns the first named read, contract, or backfill failure.
-    pub async fn lookup_many(&self, keys: &[K]) -> Result<Vec<CacheLookup<V>>, Error> {
+    pub async fn lookup_many(&self, keys: &[K]) -> Result<Vec<Option<CacheHit<V>>>, Error> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut states = (0..keys.len())
-            .map(|_| BatchLookupState::default())
-            .collect::<Vec<_>>();
+        let mut hits = (0..keys.len()).map(|_| None).collect::<Vec<_>>();
 
         for (layer_index, layer) in self.inner.layers.iter().enumerate() {
-            let unresolved = states
+            let unresolved = hits
                 .iter()
                 .enumerate()
-                .filter_map(|(index, state)| state.lookup.is_none().then_some(index))
+                .filter_map(|(index, hit)| hit.is_none().then_some(index))
                 .collect::<Vec<_>>();
             if unresolved.is_empty() {
                 break;
@@ -249,54 +245,34 @@ where
                 .backend
                 .get_many(&backend_keys)
                 .await
-                .map_err(|source| named_failure(Operation::Get, layer, source))?;
-            validate_batch_len(layer, unresolved.len(), results.len())?;
+                .map_err(|source| backend_error(Operation::Get, layer, source))?;
+            validate_batch_result_len(layer, unresolved.len(), results.len())?;
 
-            for (item_index, lookup) in unresolved.into_iter().zip(results) {
-                if let Lookup::Hit(entry) = lookup {
+            for (item_index, entry) in unresolved.into_iter().zip(results) {
+                if let Some(entry) = entry {
                     let entry = validate_hit(layer, entry)?;
-                    states[item_index].hit_index = Some(layer_index);
-                    states[item_index].lookup = Some(CacheLookup::Hit {
-                        value: entry.value,
-                        backend: Arc::clone(&layer.name),
-                        remaining_ttl: entry.remaining_ttl,
+                    hits[item_index] = Some(LocatedHit {
+                        layer_index,
+                        hit: CacheHit {
+                            backend: Arc::clone(&layer.name),
+                            entry,
+                        },
                     });
                 }
             }
         }
 
-        for state in &mut states {
-            if state.lookup.is_none() {
-                state.lookup = Some(CacheLookup::Miss);
-            }
-        }
-
-        for item_index in 0..states.len() {
-            let Some(hit_index) = states[item_index].hit_index else {
+        for (item_index, located) in hits.iter().enumerate() {
+            let Some(located) = located else {
                 continue;
             };
-            let Some(lookup) = states[item_index].lookup.as_ref() else {
-                continue;
-            };
-            let (value, remaining_ttl) = match lookup {
-                CacheLookup::Miss => continue,
-                CacheLookup::Hit {
-                    value,
-                    remaining_ttl,
-                    ..
-                } => (Arc::clone(value), *remaining_ttl),
-            };
-            self.backfill(
-                &keys[item_index],
-                &CacheEntry::new(value, remaining_ttl),
-                hit_index,
-            )
-            .await?;
+            self.backfill(&keys[item_index], &located.hit.entry, located.layer_index)
+                .await?;
         }
 
-        Ok(states
+        Ok(hits
             .into_iter()
-            .map(|state| state.lookup.unwrap_or(CacheLookup::Miss))
+            .map(|located| located.map(|located| located.hit))
             .collect())
     }
 
@@ -310,7 +286,7 @@ where
             .lookup_many(keys)
             .await?
             .into_iter()
-            .map(CacheLookup::into_value)
+            .map(|hit| hit.map(CacheHit::into_value))
             .collect())
     }
 
@@ -340,7 +316,7 @@ where
                 .backend
                 .set_many(&borrowed)
                 .await
-                .map_err(|source| named_failure(Operation::Set, layer, source))?;
+                .map_err(|source| backend_error(Operation::Set, layer, source))?;
         }
         Ok(())
     }
@@ -360,7 +336,7 @@ where
                 .backend
                 .remove_many(&backend_keys)
                 .await
-                .map_err(|source| named_failure(Operation::Remove, layer, source))?;
+                .map_err(|source| backend_error(Operation::Remove, layer, source))?;
         }
         Ok(())
     }
@@ -376,7 +352,7 @@ where
                 .backend
                 .set(key, Arc::clone(&entry.value), entry.remaining_ttl)
                 .await
-                .map_err(|source| named_failure(Operation::Backfill, layer, source))?;
+                .map_err(|source| backend_error(Operation::Backfill, layer, source))?;
         }
         Ok(())
     }
@@ -455,18 +431,9 @@ where
     }
 }
 
-struct BatchLookupState<V> {
-    lookup: Option<CacheLookup<V>>,
-    hit_index: Option<usize>,
-}
-
-impl<V> Default for BatchLookupState<V> {
-    fn default() -> Self {
-        Self {
-            lookup: None,
-            hit_index: None,
-        }
-    }
+struct LocatedHit<V> {
+    layer_index: usize,
+    hit: CacheHit<V>,
 }
 
 fn validate_hit<K, V>(
@@ -476,7 +443,7 @@ fn validate_hit<K, V>(
     if entry.remaining_ttl == -1 || entry.remaining_ttl > 0 {
         Ok(entry)
     } else {
-        Err(named_failure(
+        Err(backend_error(
             Operation::Get,
             layer,
             Error::backend(InvalidRemainingTtlError(entry.remaining_ttl)),
@@ -484,7 +451,8 @@ fn validate_hit<K, V>(
     }
 }
 
-fn named_failure<K, V>(operation: Operation, layer: &CacheLayer<K, V>, source: Error) -> Error {
+/// Creates a named backend failure.
+fn backend_error<K, V>(operation: Operation, layer: &CacheLayer<K, V>, source: Error) -> Error {
     Error::Backend(BackendFailure {
         operation,
         backend: Arc::clone(&layer.name),
@@ -492,7 +460,8 @@ fn named_failure<K, V>(operation: Operation, layer: &CacheLayer<K, V>, source: E
     })
 }
 
-fn validate_batch_len<K, V>(
+/// Ensures each requested key has one result so batch positions remain aligned.
+fn validate_batch_result_len<K, V>(
     layer: &CacheLayer<K, V>,
     expected: usize,
     actual: usize,
@@ -500,7 +469,7 @@ fn validate_batch_len<K, V>(
     if expected == actual {
         Ok(())
     } else {
-        Err(named_failure(
+        Err(backend_error(
             Operation::Get,
             layer,
             Error::backend(BatchResultLengthError { expected, actual }),
@@ -515,7 +484,7 @@ impl fmt::Display for InvalidRemainingTtlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "backend returned Hit with invalid remaining TTL {}",
+            "backend returned a cache entry with invalid remaining TTL {}",
             self.0
         )
     }

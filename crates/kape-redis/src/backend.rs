@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, KapeError, Lookup, SetItem};
+use kape::{CacheBackend, CacheEntry, KapeError, SetItem};
 use redis::aio::ConnectionManager;
 
 use crate::{RedisBackendError, RedisCodec, StringCodec};
@@ -105,7 +105,7 @@ where
     V: Send + Sync,
     C: RedisCodec<K, V>,
 {
-    async fn get(&self, key: &K) -> Result<Lookup<V>, KapeError> {
+    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
         let key = self.encode_key(key)?;
         let mut connection = self.connection.clone();
         let mut pipeline = redis::pipe();
@@ -151,7 +151,7 @@ where
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Lookup<V>>, KapeError> {
+    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Option<CacheEntry<V>>>, KapeError> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }

@@ -13,7 +13,7 @@ Create named backends in lookup order and use explicit millisecond TTLs:
 
 ```rust,ignore
 use std::sync::Arc;
-use kape::{Cache, CacheLookup};
+use kape::Cache;
 use kape_memory::MemoryBackend;
 
 #[tokio::main]
@@ -28,10 +28,13 @@ async fn main() -> Result<(), kape::KapeError> {
     assert_eq!(cache.get(&key).await?.as_deref().map(String::as_str), Some("Ada"));
 
     match cache.lookup(&key).await? {
-        CacheLookup::Hit { backend, remaining_ttl, .. } => {
-            println!("hit {backend}, {remaining_ttl}ms remaining");
+        Some(hit) => {
+            println!(
+                "hit {}, {}ms remaining",
+                hit.backend, hit.entry.remaining_ttl
+            );
         }
-        CacheLookup::Miss => println!("miss"),
+        None => println!("miss"),
     }
     Ok(())
 }
@@ -44,8 +47,9 @@ TTL is always `i64` milliseconds:
 - a positive value: finite lifetime;
 - below `-1`: `KapeError::InvalidTtl`, before any mutation.
 
-`get` returns `Option<Arc<V>>`. `lookup` additionally returns the backend name
-and exact remaining TTL. Absence is only an `Ok` miss; read and backfill
+`get` returns `Option<Arc<V>>`. `lookup` returns `Option<CacheHit<V>>`, which
+contains the source backend name and its `CacheEntry<V>`. The entry contains the
+value and exact remaining TTL. Absence is only an `Ok` miss; read and backfill
 failures return `Err`.
 
 Backend names must be non-blank and unique, even when multiple instances use

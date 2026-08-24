@@ -60,7 +60,7 @@ let value = cache
 ```
 
 `wrap(key, loader, ttl)` performs the same lookup and reverse write as
-`get_or_load`. On a Hit it runs neither the loader nor the selector. On a Miss,
+`get_or_load`. On a hit it runs neither the loader nor the selector. On a miss,
 the selector receives the successfully loaded value and returns its raw `i64`
 millisecond TTL. Values below `-1` fail before any backend write. The one
 selected TTL applies to the complete backend chain; there are no global hooks,

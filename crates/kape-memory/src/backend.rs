@@ -1,7 +1,7 @@
 use std::{hash::Hash, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError, Lookup};
+use kape::{CacheBackend, CacheEntry, KapeError};
 use moka::future::Cache;
 
 use crate::MemoryError;
@@ -56,27 +56,27 @@ where
     K: Clone + Eq + Hash + Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    async fn get(&self, key: &K) -> Result<Lookup<V>, KapeError> {
+    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
         let Some(entry) = self.cache.get(key).await else {
-            return Ok(Lookup::Miss);
+            return Ok(None);
         };
 
         let Some(expires_at) = entry.expires_at else {
-            return Ok(Lookup::Hit(CacheEntry::new(entry.value, -1)));
+            return Ok(Some(CacheEntry::new(entry.value, -1)));
         };
         let now = Instant::now();
         if expires_at <= now {
             self.cache.invalidate(key).await;
-            return Ok(Lookup::Miss);
+            return Ok(None);
         }
 
         let remaining_ttl = expires_at.duration_since(now).as_millis();
         if remaining_ttl == 0 {
             self.cache.invalidate(key).await;
-            return Ok(Lookup::Miss);
+            return Ok(None);
         }
         let remaining_ttl = i64::try_from(remaining_ttl).map_err(|_| MemoryError::TtlOverflow)?;
-        Ok(Lookup::Hit(CacheEntry::new(entry.value, remaining_ttl)))
+        Ok(Some(CacheEntry::new(entry.value, remaining_ttl)))
     }
 
     async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> Result<(), KapeError> {
