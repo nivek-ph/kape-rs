@@ -41,13 +41,15 @@ mod tests {
             decode_lookup::<String, String, _>(&codec, Some(text.clone()), Some(1)).unwrap(),
             Some(entry) if entry.remaining_ttl == 1
         ));
-        assert!(matches!(
-            decode_lookup::<String, String, _>(&codec, Some(text.clone()), Some(0)).unwrap(),
-            None
-        ));
-        assert!(matches!(
-            decode_lookup::<String, String, _>(&codec, Some(text), Some(-1)).unwrap(),
-            None
-        ));
+        assert!(
+            decode_lookup::<String, String, _>(&codec, Some(text.clone()), Some(0))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            decode_lookup::<String, String, _>(&codec, Some(text), Some(-1))
+                .unwrap()
+                .is_none()
+        );
     }
 }

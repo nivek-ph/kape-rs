@@ -42,27 +42,23 @@ where
         .remove(key)
         .await
         .expect("contract setup remove failed");
-    assert!(matches!(
-        backend.get(key).await.expect("contract miss read failed"),
-        None
-    ));
+    assert!(
+        backend
+            .get(key)
+            .await
+            .expect("contract miss read failed")
+            .is_none()
+    );
 
     let expected = Arc::new(value);
     backend
         .set(key, Arc::clone(&expected), -1)
         .await
         .expect("contract immortal write failed");
-    match backend
-        .get(key)
-        .await
-        .expect("contract immortal read failed")
-    {
-        Some(entry) => {
-            assert_eq!(entry.value.as_ref(), expected.as_ref());
-            assert_eq!(entry.remaining_ttl, -1);
-        }
-        None => panic!("expected immortal hit, got a miss"),
-    }
+    assert!(matches!(
+        backend.get(key).await.expect("contract immortal read failed"),
+        Some(entry) if entry.value == expected && entry.remaining_ttl == -1
+    ));
 
     assert!(matches!(
         backend.set(key, Arc::clone(&expected), -2).await,
@@ -77,26 +73,26 @@ where
         .set(key, Arc::clone(&expected), 0)
         .await
         .expect("contract zero-TTL write failed");
-    assert!(matches!(
+    assert!(
         backend
             .get(key)
             .await
-            .expect("contract zero-TTL read failed"),
-        None
-    ));
+            .expect("contract zero-TTL read failed")
+            .is_none()
+    );
 
     backend
         .set(key, expected, -1)
         .await
         .expect("contract rewrite failed");
     backend.remove(key).await.expect("contract remove failed");
-    assert!(matches!(
+    assert!(
         backend
             .get(key)
             .await
-            .expect("contract post-remove read failed"),
-        None
-    ));
+            .expect("contract post-remove read failed")
+            .is_none()
+    );
 }
 
 /// Checks positive millisecond TTL reporting and expiration.
@@ -133,13 +129,13 @@ where
 
     let wait_ms = u64::try_from(ttl_ms).expect("positive TTL must fit u64") + 25;
     sleep(Duration::from_millis(wait_ms)).await;
-    assert!(matches!(
+    assert!(
         backend
             .get(key)
             .await
-            .expect("contract expired read failed"),
-        None
-    ));
+            .expect("contract expired read failed")
+            .is_none()
+    );
 }
 
 /// Checks ordered batch operations, duplicate keys, misses, pre-validation,
@@ -182,7 +178,7 @@ pub async fn assert_batch_contract<B, K, V>(
         .expect("batch contract read failed");
     assert_eq!(results.len(), read_keys.len());
     assert!(matches!(&results[0], Some(entry) if entry.value == first_value));
-    assert!(matches!(&results[1], None));
+    assert!(results[1].is_none());
     assert!(matches!(&results[2], Some(entry) if entry.value == first_value));
     assert!(matches!(&results[3], Some(entry) if entry.value == second_value));
 
@@ -200,20 +196,20 @@ pub async fn assert_batch_contract<B, K, V>(
         .set_many(&[SetItem::new(first_key, Arc::clone(&first_value), 0)])
         .await
         .expect("batch zero-TTL invalidation failed");
-    assert!(matches!(
+    assert!(
         backend
             .get(first_key)
             .await
-            .expect("batch zero-TTL read failed"),
-        None
-    ));
-    assert!(matches!(
+            .expect("batch zero-TTL read failed")
+            .is_none()
+    );
+    assert!(
         backend
             .get(second_key)
             .await
-            .expect("batch zero-TTL changed another key"),
-        Some(_)
-    ));
+            .expect("batch zero-TTL changed another key")
+            .is_some()
+    );
 
     backend
         .remove_many(&[first_key, second_key])

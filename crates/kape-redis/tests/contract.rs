@@ -109,10 +109,8 @@ async fn satisfies_backend_contract() {
         .await
         .expect("protected namespace write failed");
     backend.clear().await.expect("namespace clear failed");
-    assert!(matches!(
-        protected.get(&"protected".to_owned()).await.unwrap(),
-        Some(_)
-    ));
+    let protected_hit = protected.get(&"protected".to_owned()).await.unwrap();
+    assert!(protected_hit.is_some());
     protected.clear().await.expect("protected cleanup failed");
 
     assert_clear_contract(

@@ -64,13 +64,7 @@ fn default_batch_is_sequential_and_retains_earlier_effects() {
             .expect_err("second scalar write should fail");
         assert!(matches!(error, KapeError::BackendSource { .. }));
 
-        assert!(matches!(
-            backend.get(&"first".to_owned()).await.unwrap(),
-            Some(_)
-        ));
-        assert!(matches!(
-            backend.get(&"later".to_owned()).await.unwrap(),
-            None
-        ));
+        assert!(backend.get(&"first".to_owned()).await.unwrap().is_some());
+        assert!(backend.get(&"later".to_owned()).await.unwrap().is_none());
     });
 }

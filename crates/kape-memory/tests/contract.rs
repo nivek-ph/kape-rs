@@ -73,7 +73,7 @@ async fn capacity_is_an_entry_count_upper_bound() {
             .await
             .expect("capacity test read failed")
             .into_iter()
-            .filter(Option::is_some)
+            .flatten()
             .count();
         if hits <= 1 {
             return;

@@ -101,13 +101,13 @@ fn single_backend_scalar_contract() {
             .await
             .expect_err("invalid TTL must fail");
         assert!(matches!(error, KapeError::InvalidTtl(-2)));
-        assert!(matches!(
+        assert!(
             backend
                 .get(&key)
                 .await
-                .expect("backend read should succeed"),
-            None
-        ));
+                .expect("backend read should succeed")
+                .is_none()
+        );
 
         cache.remove(&key).await.expect("remove should succeed");
         cache.clear().await.expect("clear should succeed");

@@ -134,7 +134,10 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&String]) -> Result<Vec<Option<CacheEntry<String>>>, KapeError> {
+    async fn get_many(
+        &self,
+        keys: &[&String],
+    ) -> Result<Vec<Option<CacheEntry<String>>>, KapeError> {
         self.record(Event::GetMany(
             self.name,
             keys.iter().map(|key| (*key).clone()).collect(),

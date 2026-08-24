@@ -120,10 +120,8 @@ async fn satisfies_backend_contract() {
         .await
         .unwrap();
     backend.clear().await.unwrap();
-    assert!(matches!(
-        protected.get(&"protected".to_owned()).await.unwrap(),
-        Some(_)
-    ));
+    let protected_hit = protected.get(&"protected".to_owned()).await.unwrap();
+    assert!(protected_hit.is_some());
 
     backend
         .set(&"expired".to_owned(), Arc::new("value".to_owned()), 1)
@@ -131,10 +129,8 @@ async fn satisfies_backend_contract() {
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     assert!(backend.purge_expired().await.unwrap() >= 1);
-    assert!(matches!(
-        protected.get(&"protected".to_owned()).await.unwrap(),
-        Some(_)
-    ));
+    let protected_hit = protected.get(&"protected".to_owned()).await.unwrap();
+    assert!(protected_hit.is_some());
 
     let overflow = backend
         .set(

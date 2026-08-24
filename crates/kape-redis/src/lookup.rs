@@ -60,10 +60,11 @@ mod tests {
         let codec = StringCodec;
         let bytes = b"value".as_slice();
 
-        assert!(matches!(
-            decode_lookup::<String, String, _>(&codec, Some(bytes), -2).unwrap(),
-            None
-        ));
+        assert!(
+            decode_lookup::<String, String, _>(&codec, Some(bytes), -2)
+                .unwrap()
+                .is_none()
+        );
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), -1).unwrap(),
             Some(entry) if entry.remaining_ttl == -1
@@ -72,10 +73,11 @@ mod tests {
             decode_lookup::<String, String, _>(&codec, Some(bytes), 1).unwrap(),
             Some(entry) if entry.remaining_ttl == 1
         ));
-        assert!(matches!(
-            decode_lookup::<String, String, _>(&codec, Some(bytes), 0).unwrap(),
-            None
-        ));
+        assert!(
+            decode_lookup::<String, String, _>(&codec, Some(bytes), 0)
+                .unwrap()
+                .is_none()
+        );
         assert!(matches!(
             decode_lookup::<String, String, _>(&codec, Some(bytes), -3),
             Err(RedisBackendError::InvalidPttl(-3))
@@ -85,14 +87,14 @@ mod tests {
     #[test]
     fn nil_value_is_a_miss_without_interpreting_pttl() {
         let codec = StringCodec;
-        assert!(matches!(
+        assert!(
             decode_pair::<String, String, _>(
                 &codec,
                 &redis::Value::Nil,
                 &redis::Value::BulkString(b"invalid".to_vec()),
             )
-            .unwrap(),
-            None
-        ));
+            .unwrap()
+            .is_none()
+        );
     }
 }
