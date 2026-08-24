@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # crates.io Trusted Publishing exchanges this OIDC identity for a short-lived token.
       id-token: write
     steps:
       - name: Checkout repository
