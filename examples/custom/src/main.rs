@@ -101,3 +101,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("value: {:?}", cache.get(&key).await?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CustomBackend;
+    use kape_testkit::{
+        assert_backend_contract, assert_batch_contract, assert_clear_contract,
+        assert_expiring_contract,
+    };
+
+    #[tokio::test]
+    async fn satisfies_backend_contract() {
+        let backend = CustomBackend::default();
+        assert_backend_contract(&backend, &"contract".to_owned(), String::new()).await;
+        assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 100).await;
+        assert_batch_contract(
+            &backend,
+            &"batch-first".to_owned(),
+            &"batch-second".to_owned(),
+            &"batch-missing".to_owned(),
+            "first".to_owned(),
+            "second".to_owned(),
+        )
+        .await;
+        assert_clear_contract(
+            &backend,
+            &"clear-first".to_owned(),
+            &"clear-second".to_owned(),
+            "first".to_owned(),
+            "second".to_owned(),
+        )
+        .await;
+    }
+}

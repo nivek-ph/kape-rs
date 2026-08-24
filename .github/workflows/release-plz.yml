@@ -9,7 +9,7 @@ on:
       - "tests/**"
 
 jobs:
-  # Release unpublished packages.
+  # Release publishable packages after an approved release PR.
   release-plz-release:
     name: Release-plz release
     if: ${{ github.repository_owner == 'nivek-ph' }}

@@ -30,7 +30,7 @@ kape = { path = "crates/kape", version = "0.1.0-alpha.1" }
 kape-memory = { path = "crates/kape-memory", version = "0.1.0-alpha.1" }
 kape-postgres = { path = "crates/kape-postgres", version = "0.1.0-alpha.1" }
 kape-redis = { path = "crates/kape-redis", version = "0.1.0-alpha.1" }
-kape-testkit = { path = "crates/kape-testkit" }
+kape-testkit = { path = "crates/kape-testkit", version = "0.1.0-alpha.1" }
 
 # External dependencies
 async-trait = "0.1.92"

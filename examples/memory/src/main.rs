@@ -29,29 +29,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let load_key = get_random_string();
-    let loaded = cache
-        .get_or_load(
-            &load_key,
-            || async { Ok::<_, std::io::Error>(get_random_string()) },
-            60_000,
-        )
-        .await?;
-    println!("loaded: {loaded}");
+    let loader = || async { Ok::<_, std::io::Error>(get_random_string()) };
+    let value = cache.get_or_load(&load_key, loader, 60_000).await?;
+    println!("loaded: {value}");
 
-    let wrap_key = get_random_string();
-    let wrapped = cache
-        .wrap(
-            &wrap_key,
-            || async { Ok::<_, std::io::Error>(get_random_string()) },
-            |value| {
-                if value.as_bytes().first().is_some_and(u8::is_ascii_uppercase) {
-                    300_000
-                } else {
-                    60_000
-                }
-            },
-        )
-        .await?;
+    let key = get_random_string();
+    let get_ttl = |value: &String| {
+        if value.as_bytes().first().is_some_and(u8::is_ascii_uppercase) {
+            3_000
+        } else {
+            6_000
+        }
+    };
+    let wrapped = cache.wrap(&key, loader, get_ttl).await?;
     println!("wrapped: {wrapped}");
 
     cache.clear().await?;

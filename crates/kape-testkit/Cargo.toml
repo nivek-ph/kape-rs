@@ -7,10 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false
+readme = "README.md"
+documentation = "https://docs.rs/kape-testkit"
+keywords = ["cache", "testing", "backend", "contract"]
+categories = ["caching", "development-tools::testing"]
+publish = true
 
 [dependencies]
 kape.workspace = true
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 async-trait.workspace = true

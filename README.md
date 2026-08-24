@@ -46,7 +46,7 @@ path and raw millisecond contract.
 | [`kape-memory`](crates/kape-memory) | Process-local `Arc<V>` storage |
 | [`kape-redis`](crates/kape-redis) | Redis adapter with explicit codecs |
 | [`kape-postgres`](crates/kape-postgres) | PostgreSQL adapter with explicit codecs |
-| [`kape-testkit`](crates/kape-testkit) | Unpublished shared adapter contract tests |
+| [`kape-testkit`](crates/kape-testkit) | Reusable adapter contract tests |
 
 Version `0.1.0` intentionally has no stale fallback, configurable failure
 policies, same-key loader coalescing, targeted backend management, or
@@ -66,7 +66,7 @@ cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 mdbook build
 mdbook test
-cargo package -p kape -p kape-memory -p kape-redis -p kape-postgres --allow-dirty
+cargo package -p kape -p kape-testkit -p kape-memory -p kape-redis -p kape-postgres --allow-dirty
 ```
 
 Redis and PostgreSQL contract tests require live services and are reported

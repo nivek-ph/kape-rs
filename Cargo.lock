@@ -832,6 +832,7 @@ dependencies = [
  "async-trait",
  "futures-lite",
  "kape",
+ "tokio",
 ]
 
 [[package]]

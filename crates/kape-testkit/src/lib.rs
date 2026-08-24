@@ -8,6 +8,7 @@ use std::{
 };
 
 use kape::{CacheBackend, KapeError, Lookup, SetItem};
+use tokio::time::sleep;
 
 /// Returns a 16-character alphanumeric string from OS-seeded hasher state.
 ///
@@ -131,7 +132,7 @@ where
     }
 
     let wait_ms = u64::try_from(ttl_ms).expect("positive TTL must fit u64") + 25;
-    std::thread::sleep(Duration::from_millis(wait_ms));
+    sleep(Duration::from_millis(wait_ms)).await;
     assert!(matches!(
         backend
             .get(key)

@@ -142,4 +142,4 @@ jobs:
         with:
           cache-on-failure: true
       - name: Verify packages
-        run: cargo package -p kape -p kape-memory -p kape-redis -p kape-postgres
+        run: cargo package -p kape -p kape-testkit -p kape-memory -p kape-redis -p kape-postgres
