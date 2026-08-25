@@ -813,7 +813,7 @@ fn batch_mutations_are_reverse_and_preserve_item_order() {
             .expect("cache should build");
         let items = [
             SetItem::new("a".to_owned(), "A".to_owned(), -1),
-            SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+            SetItem::new("b".to_owned(), "B".to_owned(), 500),
         ];
 
         cache
@@ -827,12 +827,39 @@ fn batch_mutations_are_reverse_and_preserve_item_order() {
         assert_eq!(
             take_events(&events),
             [
-                Event::SetMany("cold", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
-                Event::SetMany("hot", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
+                Event::SetMany("cold", vec![("a".to_owned(), -1), ("b".to_owned(), 500)]),
+                Event::SetMany("hot", vec![("a".to_owned(), -1), ("b".to_owned(), 500)]),
                 Event::RemoveMany("cold", vec!["a".to_owned(), "a".to_owned()]),
                 Event::RemoveMany("hot", vec!["a".to_owned(), "a".to_owned()]),
             ]
         );
+    });
+}
+
+#[test]
+fn duplicate_batch_write_is_rejected_before_mutation() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+        let error = cache
+            .set_many(&[
+                SetItem::new("a".to_owned(), "A".to_owned(), -1),
+                SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+            ])
+            .await
+            .expect_err("duplicate batch key must fail");
+
+        assert!(matches!(
+            error,
+            KapeError::DuplicateBatchKey {
+                first_index: 0,
+                duplicate_index: 1,
+            }
+        ));
+        assert!(take_events(&events).is_empty());
     });
 }
 

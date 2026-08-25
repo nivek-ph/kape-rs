@@ -2,7 +2,7 @@
 
 use std::{
     fmt::Debug,
-    hash::{BuildHasher, RandomState},
+    hash::{BuildHasher, Hash, RandomState},
     sync::Arc,
     time::Duration,
 };
@@ -138,8 +138,8 @@ where
     );
 }
 
-/// Checks ordered batch operations, duplicate keys, misses, pre-validation,
-/// and empty-batch behavior.
+/// Checks ordered batch reads, duplicate read positions, duplicate-write
+/// rejection, misses, pre-validation, and empty-batch behavior.
 ///
 /// # Panics
 ///
@@ -153,7 +153,7 @@ pub async fn assert_batch_contract<B, K, V>(
     second_value: V,
 ) where
     B: CacheBackend<K, V>,
-    K: Sync,
+    K: Eq + Hash + Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
     backend
@@ -190,6 +190,26 @@ pub async fn assert_batch_contract<B, K, V>(
             ])
             .await,
         Err(KapeError::InvalidTtl(-2))
+    ));
+
+    assert!(matches!(
+        backend
+            .set_many(&[
+                SetItem::new(first_key, Arc::clone(&second_value), -1),
+                SetItem::new(first_key, Arc::clone(&first_value), -1),
+            ])
+            .await,
+        Err(KapeError::DuplicateBatchKey {
+            first_index: 0,
+            duplicate_index: 1,
+        })
+    ));
+    assert!(matches!(
+        backend
+            .get(first_key)
+            .await
+            .expect("duplicate batch write changed value"),
+        Some(entry) if entry.value == first_value
     ));
 
     backend
@@ -254,7 +274,7 @@ pub async fn assert_clear_contract<B, K, V>(
     second_value: V,
 ) where
     B: CacheBackend<K, V>,
-    K: Sync,
+    K: Eq + Hash + Sync,
     V: Debug + PartialEq + Send + Sync + 'static,
 {
     backend

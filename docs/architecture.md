@@ -22,8 +22,8 @@ serialization dependency.
 
 Every backend implements four scalar methods: `get`, `set`, `remove`, and
 `clear`. Default batch methods execute the scalar contract sequentially;
-adapters may override them while preserving positions, duplicates, and TTL
-semantics.
+adapters may override them while preserving read positions and TTL semantics
+and rejecting duplicate batch-write keys before mutation.
 
 Reads visit backends in configured order. A valid hit has a remaining TTL of
 `-1` or a positive millisecond value. A hit carrying `0` or a value below `-1`

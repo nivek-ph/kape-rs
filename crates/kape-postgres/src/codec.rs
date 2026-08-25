@@ -24,10 +24,22 @@ pub trait PostgresValue:
     + for<'q> Encode<'q, Postgres>
     + for<'r> Decode<'r, Postgres>
 {
+    /// Returns the SQL array type used to resolve bulk `UNNEST` parameters.
+    #[doc(hidden)]
+    fn array_type_name() -> &'static str;
 }
 
-impl PostgresValue for String {}
-impl PostgresValue for Vec<u8> {}
+impl PostgresValue for String {
+    fn array_type_name() -> &'static str {
+        "TEXT[]"
+    }
+}
+
+impl PostgresValue for Vec<u8> {
+    fn array_type_name() -> &'static str {
+        "BYTEA[]"
+    }
+}
 
 /// A PostgreSQL key representation that can carry the namespace prefix.
 #[doc(hidden)]

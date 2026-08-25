@@ -2,12 +2,14 @@ use std::{
     collections::HashSet,
     fmt,
     future::Future,
+    hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use crate::{
-    BackendFailure, CacheBackend, KapeError as Error, Operation, SetItem, write::validate_ttl,
+    BackendFailure, CacheBackend, KapeError as Error, Operation, SetItem, validate_set_items,
+    write::validate_ttl,
 };
 
 struct CacheLayer<K, V> {
@@ -304,15 +306,17 @@ where
             .collect())
     }
 
-    /// Writes multiple items to every backend in reverse configured order.
+    /// Writes uniquely keyed items to every backend in reverse configured order.
     ///
     /// # Errors
     ///
-    /// Returns invalid TTL before mutation or the first named batch failure.
-    pub async fn set_many(&self, items: &[SetItem<K, V>]) -> Result<(), Error> {
-        for item in items {
-            validate_ttl(item.ttl)?;
-        }
+    /// Returns invalid TTL or duplicate-key input before mutation, or the first
+    /// named batch failure.
+    pub async fn set_many(&self, items: &[SetItem<K, V>]) -> Result<(), Error>
+    where
+        K: Eq + Hash,
+    {
+        validate_set_items(items)?;
         if items.is_empty() {
             return Ok(());
         }

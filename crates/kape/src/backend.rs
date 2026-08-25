@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{hash::Hash, sync::Arc};
 
-use crate::{CacheEntry, KapeError, SetItem, write::validate_ttl};
+use crate::{CacheEntry, KapeError, SetItem, validate_set_items};
 
 /// A typed cache backend implementation.
 ///
-/// Implementations must represent misses as `None` and preserve exact remaining
-/// TTL, input order, and duplicate positions. Apply `#[async_trait::async_trait]`
-/// to each implementation block.
+/// Implementations must represent misses as `None`, preserve exact remaining
+/// TTL and read positions, and reject duplicate batch-write keys before
+/// mutation. Apply `#[async_trait::async_trait]` to each implementation block.
 #[async_trait::async_trait]
 pub trait CacheBackend<K, V>: Send + Sync
 where
@@ -34,11 +34,12 @@ where
         Ok(results)
     }
 
-    /// Writes multiple items in input order.
-    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError> {
-        for item in items {
-            validate_ttl(item.ttl)?;
-        }
+    /// Writes multiple uniquely keyed items in input order.
+    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError>
+    where
+        K: Eq + Hash,
+    {
+        validate_set_items(items)?;
         for item in items {
             self.set(item.key, Arc::clone(&item.value), item.ttl)
                 .await?;

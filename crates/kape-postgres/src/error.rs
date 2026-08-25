@@ -9,7 +9,7 @@ pub enum PostgresBackendError {
     /// `PostgreSQL` operation failed.
     #[error("PostgreSQL operation failed: {0}")]
     Sqlx(#[from] sqlx::Error),
-    /// A finite TTL cannot be represented as an absolute `PostgreSQL` timestamp.
+    /// A finite TTL cannot be represented as an absolute Unix millisecond timestamp.
     #[error("TTL exceeds PostgreSQL millisecond range")]
     TtlOverflow,
     /// A table name was empty, unsafe, or contained more than schema and table.

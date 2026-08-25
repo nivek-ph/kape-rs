@@ -9,3 +9,5 @@ pub use backend::CacheBackend;
 pub use cache::{Cache, CacheBuilder, CacheEntry, CacheHit};
 pub use error::{BackendFailure, KapeError, Operation};
 pub use write::SetItem;
+#[doc(hidden)]
+pub use write::validate_set_items;
