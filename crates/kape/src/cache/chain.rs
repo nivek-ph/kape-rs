@@ -1,4 +1,4 @@
-use std::{future::Future, hash::Hash, sync::Arc};
+use std::{borrow::Borrow, future::Future, hash::Hash, sync::Arc};
 
 use crate::{
     BackendFailure, CacheBackend, KapeError, KapeResult, Operation, SetItem, set::validate_ttl,
@@ -134,15 +134,25 @@ where
 
     /// Writes uniquely keyed items to every backend in reverse configured order.
     ///
+    /// Each input may be a [`SetItem`], a shared reference to one, or a
+    /// `(key, value, ttl)` tuple.
+    ///
     /// # Errors
     ///
     /// Returns invalid TTL or duplicate-key input before mutation, or the first
     /// named batch failure.
-    pub async fn set_many(&self, items: &[SetItem<K, V>]) -> KapeResult<()>
+    pub async fn set_many<I, T, Q>(&self, items: I) -> KapeResult<()>
     where
+        I: IntoIterator<Item = T>,
+        T: Into<SetItem<Q, V>>,
+        Q: Borrow<K> + Eq + Hash,
         K: Eq + Hash,
     {
-        validate_set_items(items)?;
+        let items = items
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<SetItem<Q, V>>>();
+        validate_set_items(&items)?;
         if items.is_empty() {
             return Ok(());
         }
@@ -151,7 +161,7 @@ where
             let borrowed = items
                 .iter()
                 .map(|item| SetItem {
-                    key: &item.key,
+                    key: Borrow::<K>::borrow(&item.key),
                     value: Arc::clone(&item.value),
                     ttl: item.ttl,
                 })

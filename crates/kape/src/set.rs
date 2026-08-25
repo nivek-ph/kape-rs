@@ -57,3 +57,19 @@ impl<K, V> SetItem<K, V> {
         }
     }
 }
+
+impl<K, V> From<(K, V, i64)> for SetItem<K, V> {
+    fn from((key, value, ttl): (K, V, i64)) -> Self {
+        Self::new(key, value, ttl)
+    }
+}
+
+impl<'a, K, V> From<&'a SetItem<K, V>> for SetItem<&'a K, V> {
+    fn from(item: &'a SetItem<K, V>) -> Self {
+        Self {
+            key: &item.key,
+            value: Arc::clone(&item.value),
+            ttl: item.ttl,
+        }
+    }
+}

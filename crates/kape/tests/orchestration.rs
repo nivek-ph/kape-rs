@@ -1053,13 +1053,12 @@ fn batch_mutations_are_reverse_and_preserve_item_order() {
             .backend("cold", RecordingBackend::new("cold", Arc::clone(&events)))
             .build()
             .expect("cache should build");
-        let items = [
-            SetItem::new("a".to_owned(), "A".to_owned(), -1),
-            SetItem::new("b".to_owned(), "B".to_owned(), 500),
-        ];
 
         cache
-            .set_many(&items)
+            .set_many(&[
+                SetItem::new("a".to_owned(), "A".to_owned(), -1),
+                SetItem::new("b".to_owned(), "B".to_owned(), 500),
+            ])
             .await
             .expect("batch set should succeed");
         cache
@@ -1086,21 +1085,31 @@ fn duplicate_batch_write_is_rejected_before_mutation() {
             .backend("only", RecordingBackend::new("only", Arc::clone(&events)))
             .build()
             .expect("cache should build");
-        let error = cache
-            .set_many(&[
-                SetItem::new("a".to_owned(), "A".to_owned(), -1),
-                SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+        let tuple_error = cache
+            .set_many([
+                ("a".to_owned(), "A".to_owned(), -1),
+                ("a".to_owned(), "A2".to_owned(), 500),
             ])
             .await
             .expect_err("duplicate batch key must fail");
+        let items = [
+            SetItem::new("a".to_owned(), "A".to_owned(), -1),
+            SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+        ];
+        let set_item_error = cache
+            .set_many(&items)
+            .await
+            .expect_err("duplicate batch key must fail");
 
-        assert!(matches!(
-            error,
-            KapeError::DuplicateBatchKey {
-                first_index: 0,
-                duplicate_index: 1,
-            }
-        ));
+        for error in [tuple_error, set_item_error] {
+            assert!(matches!(
+                error,
+                KapeError::DuplicateBatchKey {
+                    first_index: 0,
+                    duplicate_index: 1,
+                }
+            ));
+        }
         assert!(take_events(&events).is_empty());
     });
 }
@@ -1173,7 +1182,10 @@ fn empty_batches_do_not_call_backends() {
                 .is_empty()
         );
         assert!(cache.get_many(&[]).await.expect("empty get").is_empty());
-        cache.set_many(&[]).await.expect("empty set");
+        cache
+            .set_many(std::iter::empty::<SetItem<String, String>>())
+            .await
+            .expect("empty set");
         cache.remove_many(&[]).await.expect("empty remove");
         assert!(take_events(&events).is_empty());
     });

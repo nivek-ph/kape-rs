@@ -37,9 +37,14 @@ where
         None => {}
     }
 
+    cache.set_many([
+        ("a".to_owned(), "one".to_owned(), -1),
+        ("b".to_owned(), "two".to_owned(), 30_000),
+    ]).await?;
+    // Or construct SetItem explicitly.
     cache.set_many(&[
-        SetItem::new("a".to_owned(), "one".to_owned(), -1),
-        SetItem::new("b".to_owned(), "two".to_owned(), 30_000),
+        SetItem::new("c".to_owned(), "three".to_owned(), -1),
+        SetItem::new("d".to_owned(), "four".to_owned(), 30_000),
     ]).await?;
     let values = cache.get_many(&["a".to_owned(), "a".to_owned()]).await?;
     assert_eq!(values.len(), 2);
