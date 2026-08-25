@@ -3,11 +3,11 @@
 mod backend;
 mod cache;
 mod error;
-mod write;
+mod set;
 
 pub use backend::CacheBackend;
 pub use cache::{Cache, CacheBuilder, CacheEntry, CacheHit};
-pub use error::{BackendFailure, KapeError, Operation};
-pub use write::SetItem;
+pub use error::{BackendFailure, KapeError, KapeResult, Operation};
+pub use set::SetItem;
 #[doc(hidden)]
-pub use write::validate_set_items;
+pub use set::validate_set_items;

@@ -1,9 +1,9 @@
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
-use crate::KapeError;
+use crate::{KapeError, KapeResult};
 
 /// Validates the TTL value.
-pub(crate) fn validate_ttl(ttl: i64) -> Result<(), KapeError> {
+pub(crate) fn validate_ttl(ttl: i64) -> KapeResult<()> {
     if ttl < -1 {
         Err(KapeError::InvalidTtl(ttl))
     } else {
@@ -11,14 +11,14 @@ pub(crate) fn validate_ttl(ttl: i64) -> Result<(), KapeError> {
     }
 }
 
-/// Validates write TTLs and rejects duplicate batch keys before mutation.
+/// Validates TTLs and rejects duplicate keys before mutation.
 ///
 /// # Errors
 ///
 /// Returns [`KapeError::InvalidTtl`] for an invalid TTL or
 /// [`KapeError::DuplicateBatchKey`] for the first repeated key.
 #[doc(hidden)]
-pub fn validate_set_items<K, V>(items: &[SetItem<K, V>]) -> Result<(), KapeError>
+pub fn validate_set_items<K, V>(items: &[SetItem<K, V>]) -> KapeResult<()>
 where
     K: Eq + Hash,
 {

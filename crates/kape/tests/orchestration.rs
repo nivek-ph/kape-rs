@@ -10,7 +10,8 @@ use std::{
 
 use futures_lite::future::block_on;
 use kape::{
-    BackendFailure, Cache, CacheBackend, CacheEntry, CacheHit, KapeError, Operation, SetItem,
+    BackendFailure, Cache, CacheBackend, CacheEntry, CacheHit, KapeError, KapeResult, Operation,
+    SetItem,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,8 +31,10 @@ struct RecordingBackend {
     entries: Arc<Mutex<HashMap<String, CacheEntry<String>>>>,
     events: Arc<Mutex<Vec<Event>>>,
     failures: HashSet<&'static str>,
+    failing_set_keys: HashSet<String>,
     wrong_batch_len: bool,
     set_return_delay: Option<Duration>,
+    get_many_return_delay: Option<Duration>,
 }
 
 impl RecordingBackend {
@@ -41,8 +44,10 @@ impl RecordingBackend {
             entries: Arc::new(Mutex::new(HashMap::new())),
             events,
             failures: HashSet::new(),
+            failing_set_keys: HashSet::new(),
             wrong_batch_len: false,
             set_return_delay: None,
+            get_many_return_delay: None,
         }
     }
 
@@ -66,6 +71,16 @@ impl RecordingBackend {
 
     fn delaying_set_return(mut self, delay: Duration) -> Self {
         self.set_return_delay = Some(delay);
+        self
+    }
+
+    fn failing_set_for(mut self, key: &str) -> Self {
+        self.failing_set_keys.insert(key.to_owned());
+        self
+    }
+
+    fn delaying_get_many_return(mut self, delay: Duration) -> Self {
+        self.get_many_return_delay = Some(delay);
         self
     }
 
@@ -94,7 +109,7 @@ impl RecordingBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for RecordingBackend {
-    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
+    async fn get(&self, key: &String) -> KapeResult<Option<CacheEntry<String>>> {
         self.record(Event::Get(self.name, key.clone()));
         if self.failures.contains("get") {
             return Err(KapeError::backend(TestError("get failed")));
@@ -107,9 +122,9 @@ impl CacheBackend<String, String> for RecordingBackend {
             .cloned())
     }
 
-    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> KapeResult<()> {
         self.record(Event::Set(self.name, key.clone(), ttl));
-        if self.failures.contains("set") {
+        if self.failures.contains("set") || self.failing_set_keys.contains(key) {
             return Err(KapeError::backend(TestError("set failed")));
         }
         let mut entries = self.entries.lock().expect("entries mutex poisoned");
@@ -125,7 +140,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn remove(&self, key: &String) -> Result<(), KapeError> {
+    async fn remove(&self, key: &String) -> KapeResult<()> {
         self.record(Event::Remove(self.name, key.clone()));
         if self.failures.contains("remove") {
             return Err(KapeError::backend(TestError("remove failed")));
@@ -137,7 +152,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         self.record(Event::Clear(self.name));
         if self.failures.contains("clear") {
             return Err(KapeError::backend(TestError("clear failed")));
@@ -146,10 +161,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn get_many(
-        &self,
-        keys: &[&String],
-    ) -> Result<Vec<Option<CacheEntry<String>>>, KapeError> {
+    async fn get_many(&self, keys: &[&String]) -> KapeResult<Vec<Option<CacheEntry<String>>>> {
         self.record(Event::GetMany(
             self.name,
             keys.iter().map(|key| (*key).clone()).collect(),
@@ -165,10 +177,13 @@ impl CacheBackend<String, String> for RecordingBackend {
         if self.wrong_batch_len {
             results.pop();
         }
+        if let Some(delay) = self.get_many_return_delay {
+            std::thread::sleep(delay);
+        }
         Ok(results)
     }
 
-    async fn set_many(&self, items: &[SetItem<&String, String>]) -> Result<(), KapeError> {
+    async fn set_many(&self, items: &[SetItem<&String, String>]) -> KapeResult<()> {
         self.record(Event::SetMany(
             self.name,
             items
@@ -193,7 +208,7 @@ impl CacheBackend<String, String> for RecordingBackend {
         Ok(())
     }
 
-    async fn remove_many(&self, keys: &[&String]) -> Result<(), KapeError> {
+    async fn remove_many(&self, keys: &[&String]) -> KapeResult<()> {
         self.record(Event::RemoveMany(
             self.name,
             keys.iter().map(|key| (*key).clone()).collect(),
@@ -293,7 +308,7 @@ fn first_hit_does_not_backfill_or_read_later_backends() {
 }
 
 #[test]
-fn elapsed_time_between_backfill_writes_can_skip_the_next_layer() {
+fn elapsed_time_between_backfill_writes_can_skip_the_next_backend() {
     block_on(async {
         let events = events();
         let cache = Cache::builder()
@@ -799,6 +814,233 @@ fn batch_preserves_positions_duplicates_and_backfills_each_hit() {
                 && *second_ttl > 0
                 && *second_ttl <= *first_ttl
         ));
+    });
+}
+
+#[test]
+fn batch_reads_only_unresolved_positions_and_preserves_hit_sources() {
+    block_on(async {
+        let events = events();
+        let hot = RecordingBackend::new("hot", Arc::clone(&events)).entry("a", "hot-a", -1);
+        let cold = RecordingBackend::new("cold", Arc::clone(&events)).entry("b", "cold-b", -1);
+        let cache = Cache::builder()
+            .backend("hot", hot)
+            .backend("cold", cold)
+            .build()
+            .expect("cache should build");
+        let keys = ["a".to_owned(), "b".to_owned(), "a".to_owned()];
+
+        let hits = cache
+            .lookup_many(&keys)
+            .await
+            .expect("batch lookup should succeed");
+
+        assert!(matches!(
+            hits.as_slice(),
+            [Some(first), Some(second), Some(third)]
+                if first.backend.as_ref() == "hot"
+                    && first.entry.value.as_str() == "hot-a"
+                    && second.backend.as_ref() == "cold"
+                    && second.entry.value.as_str() == "cold-b"
+                    && third.backend.as_ref() == "hot"
+                    && third.entry.value.as_str() == "hot-a"
+        ));
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", keys.to_vec()),
+                Event::GetMany("cold", vec!["b".to_owned()]),
+                Event::Set("hot", "b".to_owned(), -1),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_read_failure_does_not_backfill_already_collected_hits() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&events)).entry("a", "A", -1),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events)).failing_get(),
+            )
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect_err("later batch read should fail");
+
+        assert_backend_failure(error, Operation::Get, "cold");
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["b".to_owned()]),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_invalid_hit_stops_reads_without_backfilling_collected_hits() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&events)).entry("a", "A", -1),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events)).entry("b", "B", 0),
+            )
+            .backend("deep", RecordingBackend::new("deep", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect_err("invalid hit must fail the batch");
+
+        assert_backend_failure(error, Operation::Get, "cold");
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["b".to_owned()]),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_skips_backfill_when_later_reads_exhaust_a_hit_ttl() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("hot", RecordingBackend::new("hot", Arc::clone(&events)))
+            .backend(
+                "warm",
+                RecordingBackend::new("warm", Arc::clone(&events)).entry("a", "A", 50),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events))
+                    .entry("b", "B", -1)
+                    .delaying_get_many_return(Duration::from_millis(75)),
+            )
+            .build()
+            .expect("cache should build");
+
+        let hits = cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect("batch lookup should succeed");
+
+        assert!(matches!(
+            hits.as_slice(),
+            [Some(first), Some(second)]
+                if first.backend.as_ref() == "warm"
+                    && first.entry.remaining_ttl == 50
+                    && second.backend.as_ref() == "cold"
+        ));
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("warm", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["b".to_owned()]),
+                Event::Set("warm", "b".to_owned(), -1),
+                Event::Set("hot", "b".to_owned(), -1),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_skips_backfill_when_earlier_position_backfill_exhausts_ttl() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&events))
+                    .delaying_set_return(Duration::from_millis(75)),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events))
+                    .entry("a", "A", -1)
+                    .entry("b", "B", 50),
+            )
+            .build()
+            .expect("cache should build");
+
+        let hits = cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect("batch lookup should succeed");
+
+        assert!(matches!(
+            hits.as_slice(),
+            [Some(first), Some(second)]
+                if first.backend.as_ref() == "cold"
+                    && first.entry.remaining_ttl == -1
+                    && second.backend.as_ref() == "cold"
+                    && second.entry.remaining_ttl == 50
+        ));
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["a".to_owned(), "b".to_owned()]),
+                Event::Set("hot", "a".to_owned(), -1),
+            ]
+        );
+    });
+}
+
+#[test]
+fn batch_backfill_failure_preserves_completed_earlier_positions() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend(
+                "hot",
+                RecordingBackend::new("hot", Arc::clone(&events)).failing_set_for("b"),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events))
+                    .entry("a", "A", -1)
+                    .entry("b", "B", -1),
+            )
+            .build()
+            .expect("cache should build");
+
+        let error = cache
+            .lookup_many(&["a".to_owned(), "b".to_owned()])
+            .await
+            .expect_err("later backfill should fail the batch");
+
+        assert_backend_failure(error, Operation::Backfill, "hot");
+        assert_eq!(
+            take_events(&events),
+            [
+                Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
+                Event::GetMany("cold", vec!["a".to_owned(), "b".to_owned()]),
+                Event::Set("hot", "a".to_owned(), -1),
+                Event::Set("hot", "b".to_owned(), -1),
+            ]
+        );
     });
 }
 

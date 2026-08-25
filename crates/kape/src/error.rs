@@ -70,6 +70,9 @@ pub enum KapeError {
     DuplicateBackendName(String),
 }
 
+/// A result produced by Kape core or a cache backend interface.
+pub type KapeResult<T> = Result<T, KapeError>;
+
 impl KapeError {
     /// Wraps a backend-specific error without discarding its concrete source.
     pub fn backend<E>(error: E) -> Self
