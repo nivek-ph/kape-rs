@@ -1,6 +1,6 @@
 use kape::{KapeError, KapeResult, SetItem};
 
-use crate::{PostgresBackendError, PostgresCodec, PostgresKey};
+use crate::{PostgresBackendError, PostgresCodec, codec};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct PlannedUpsert<K, V> {
@@ -45,8 +45,7 @@ impl<C> MutationPlanner<'_, C> {
     {
         validate_ttl(ttl)?;
 
-        let key = self.codec.encode_key(key)?;
-        let key = C::EncodedKey::join(C::EncodedKey::namespace_prefix(self.namespace), key);
+        let key = codec::encode_namespaced_key(self.codec, self.namespace, key)?;
         if ttl == 0 {
             return Ok(PlannedSet::Delete(key));
         }
@@ -90,7 +89,7 @@ impl<C> MutationPlanner<'_, C> {
 }
 
 /// Validates a TTL value.
-pub(crate) fn validate_ttl(ttl: i64) -> KapeResult<()> {
+fn validate_ttl(ttl: i64) -> KapeResult<()> {
     if ttl < -1 {
         Err(KapeError::InvalidTtl(ttl))
     } else {

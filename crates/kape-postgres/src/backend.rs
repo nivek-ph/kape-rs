@@ -10,7 +10,7 @@ use kape::{CacheBackend, CacheEntry, KapeResult, SetItem, validate_set_items};
 use sqlx::{AssertSqlSafe, PgPool, Postgres, Row, Transaction};
 
 use crate::mutation::{MutationPlan, MutationPlanner, PlannedSet, PlannedUpsert};
-use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec};
+use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec, codec};
 
 /// A PostgreSQL-backed cache adapter.
 pub struct PostgresBackend<K = String, V = String, C = StringCodec> {
@@ -94,8 +94,7 @@ where
     }
 
     fn encode_key(&self, key: &K) -> Result<C::EncodedKey, PostgresBackendError> {
-        let encoded = self.codec.encode_key(key)?;
-        Ok(C::EncodedKey::join(self.namespace_prefix(), encoded))
+        codec::encode_namespaced_key(&self.codec, &self.namespace, key)
     }
 
     /// Deletes expired rows owned by this namespace.
