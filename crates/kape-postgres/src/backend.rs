@@ -157,7 +157,7 @@ where
         let now_ms = (ttl > 0).then(unix_now_ms).transpose()?;
         let planner = MutationPlanner::new(&self.codec, &self.namespace);
         match planner.plan_set(key, value.as_ref(), ttl, now_ms)? {
-            PlannedSet::Upsert(planned) => upsert(&self.pool, &self.table, planned).await,
+            PlannedSet::Upsert(plan) => upsert(&self.pool, &self.table, plan).await,
             PlannedSet::Delete(key) => delete_one(&self.pool, &self.table, key).await,
         }
     }

@@ -177,11 +177,11 @@ mod tests {
         let codec = TestCodec::default();
         let planner = MutationPlanner::new(&codec, "orders");
 
-        let planned = planner
+        let plan = planner
             .plan_set(&"key".to_owned(), &"value".to_owned(), 0, None)
             .unwrap();
 
-        assert_eq!(planned, PlannedSet::Delete("kape:orders:key".to_owned()));
+        assert_eq!(plan, PlannedSet::Delete("kape:orders:key".to_owned()));
         assert_eq!(codec.value_calls.load(Ordering::Relaxed), 0);
     }
 
@@ -190,12 +190,12 @@ mod tests {
         let codec = TestCodec::default();
         let planner = MutationPlanner::new(&codec, "");
 
-        let planned = planner
+        let plan = planner
             .plan_set(&"key".to_owned(), &"value".to_owned(), -1, None)
             .unwrap();
 
         assert_eq!(
-            planned,
+            plan,
             PlannedSet::Upsert(PlannedUpsert {
                 key: "kape::key".to_owned(),
                 value: "value".to_owned(),
@@ -209,12 +209,12 @@ mod tests {
         let codec = TestCodec::default();
         let planner = MutationPlanner::new(&codec, "");
 
-        let planned = planner
+        let plan = planner
             .plan_set(&"key".to_owned(), &"value".to_owned(), 25, Some(1_000))
             .unwrap();
 
         assert!(matches!(
-            planned,
+            plan,
             PlannedSet::Upsert(PlannedUpsert {
                 expires_at_ms: Some(1_025),
                 ..
@@ -296,10 +296,10 @@ mod tests {
         let codec = TestCodec::default();
         let planner = MutationPlanner::new(&codec, "typed");
 
-        let planned = planner
+        let plan = planner
             .plan_set(&"key".to_owned(), &"value".to_owned(), 5, Some(10))
             .unwrap();
-        let PlannedSet::Upsert(upsert) = planned else {
+        let PlannedSet::Upsert(upsert) = plan else {
             panic!("positive TTL should plan an upsert");
         };
 
