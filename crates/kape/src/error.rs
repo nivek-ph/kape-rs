@@ -49,6 +49,16 @@ pub enum KapeError {
     /// A write TTL was below the supported `-1` sentinel.
     #[error("invalid TTL {0}: expected -1, 0, or a positive millisecond value")]
     InvalidTtl(i64),
+    /// A batch write contained the same key more than once.
+    #[error(
+        "duplicate batch key at index {duplicate_index}; first appeared at index {first_index}"
+    )]
+    DuplicateBatchKey {
+        /// Position of the first occurrence.
+        first_index: usize,
+        /// Position of the rejected duplicate.
+        duplicate_index: usize,
+    },
     /// A cache needs at least one backend instance.
     #[error("cache requires at least one backend")]
     NoBackends,

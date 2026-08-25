@@ -7,7 +7,9 @@
 - `set`, `remove`, and `clear` visit backends in reverse order.
 
 A miss continues. A hit stops later reads and backfills earlier backends in
-reverse order with its exact remaining TTL. Read and backfill failures return
+reverse order. Before each destination write, the core deducts elapsed read and
+completed-backfill time from finite TTLs. Time spent inside the current
+destination write remains storage-specific. Read and backfill failures return
 `Err`; absence alone is an `Ok` miss.
 
 Mutations stop at the first failure. Earlier backend effects remain. There is
@@ -16,8 +18,9 @@ the cache chain is unchanged.
 
 ## Batch operations
 
-`lookup_many`, `get_many`, `set_many`, and `remove_many` preserve input
-positions and duplicate keys. Empty input succeeds without calling a backend.
+`lookup_many` and `get_many` preserve input positions and duplicate keys.
+`set_many` rejects duplicate keys before calling a backend. `remove_many`
+preserves its input sequence. Empty input succeeds without calling a backend.
 
 Reads query unresolved positions through the chain. Each hit position is
 backfilled independently, including duplicate positions. A wrong result count,
@@ -26,7 +29,7 @@ operation return `Err`; no partial result vector is returned. Earlier effects
 remain.
 
 Batch mutations visit backends in reverse order and fail fast. All write TTLs
-are validated before the first backend mutation.
+and batch-write key uniqueness are validated before the first backend mutation.
 
 ## Loading
 

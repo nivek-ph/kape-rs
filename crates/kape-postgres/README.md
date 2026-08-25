@@ -68,8 +68,12 @@ fn bytes_example(pool: sqlx::PgPool) {
 }
 ```
 
-Finite expiry and remaining TTL use `PostgreSQL` server time. Batch reads use
-ordinality to retain misses and duplicate positions. Batch writes run in one
-local transaction, which does not create a transaction across a Kape chain.
+Finite expiry timestamps are calculated from the application host's Unix clock;
+remaining TTL and expired-row cleanup use the `PostgreSQL` server clock. Keep
+the application and database hosts time-synchronized. Batch reads use
+ordinality to retain misses and duplicate positions. Batch writes reject
+duplicate keys, use one bulk UPSERT statement, and use a local transaction only
+when the same batch also contains deletions. This does not create a transaction
+across a Kape chain.
 
 TLS is opt-in through the `native-tls` and `rustls` features.

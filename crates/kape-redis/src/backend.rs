@@ -1,7 +1,7 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{hash::Hash, marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError, SetItem};
+use kape::{CacheBackend, CacheEntry, KapeError, SetItem, validate_set_items};
 use redis::aio::ConnectionManager;
 
 use crate::{RedisBackendError, RedisCodec, StringCodec};
@@ -183,10 +183,11 @@ where
             .collect()
     }
 
-    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError> {
-        if let Some(item) = items.iter().find(|item| item.ttl < -1) {
-            return Err(KapeError::InvalidTtl(item.ttl));
-        }
+    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError>
+    where
+        K: Eq + Hash,
+    {
+        validate_set_items(items)?;
         if items.is_empty() {
             return Ok(());
         }
@@ -205,16 +206,13 @@ where
         let mut pipeline = redis::pipe();
         pipeline.atomic();
         for (key, value, ttl) in encoded {
-            if ttl == 0 {
-                pipeline.cmd("DEL").arg(key);
-            } else {
-                pipeline
-                    .cmd("SET")
-                    .arg(key)
-                    .arg(value.expect("nonzero TTL encoded a value"));
+            if let Some(value) = value {
+                pipeline.cmd("SET").arg(key).arg(value);
                 if ttl > 0 {
                     pipeline.arg("PX").arg(ttl);
                 }
+            } else {
+                pipeline.cmd("DEL").arg(key);
             }
         }
         let mut connection = self.connection.clone();

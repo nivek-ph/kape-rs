@@ -5,6 +5,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use futures_lite::future::block_on;
@@ -30,6 +31,7 @@ struct RecordingBackend {
     events: Arc<Mutex<Vec<Event>>>,
     failures: HashSet<&'static str>,
     wrong_batch_len: bool,
+    set_return_delay: Option<Duration>,
 }
 
 impl RecordingBackend {
@@ -40,6 +42,7 @@ impl RecordingBackend {
             events,
             failures: HashSet::new(),
             wrong_batch_len: false,
+            set_return_delay: None,
         }
     }
 
@@ -58,6 +61,11 @@ impl RecordingBackend {
 
     fn failing_set(mut self) -> Self {
         self.failures.insert("set");
+        self
+    }
+
+    fn delaying_set_return(mut self, delay: Duration) -> Self {
+        self.set_return_delay = Some(delay);
         self
     }
 
@@ -109,6 +117,10 @@ impl CacheBackend<String, String> for RecordingBackend {
             entries.remove(key);
         } else {
             entries.insert(key.clone(), CacheEntry::new(value, ttl));
+        }
+        drop(entries);
+        if let Some(delay) = self.set_return_delay {
+            std::thread::sleep(delay);
         }
         Ok(())
     }
@@ -209,12 +221,12 @@ impl fmt::Display for TestError {
 impl std::error::Error for TestError {}
 
 #[test]
-fn reads_in_order_and_backfills_in_reverse_with_exact_ttl() {
+fn reads_in_order_and_deducts_elapsed_time_before_each_backfill_write() {
     block_on(async {
         let events = events();
         let hot = RecordingBackend::new("hot", Arc::clone(&events));
         let warm = RecordingBackend::new("warm", Arc::clone(&events));
-        let cold = RecordingBackend::new("cold", Arc::clone(&events)).entry("key", "value", 750);
+        let cold = RecordingBackend::new("cold", Arc::clone(&events)).entry("key", "value", 60_000);
         let cache = Cache::builder()
             .backend("hot", hot)
             .backend("warm", warm)
@@ -232,20 +244,31 @@ fn reads_in_order_and_backfills_in_reverse_with_exact_ttl() {
                 ref backend,
                 entry: CacheEntry {
                     ref value,
-                    remaining_ttl: 750,
+                    remaining_ttl: 60_000,
                 },
             }) if value.as_str() == "value" && backend.as_ref() == "cold"
         ));
+        let events = take_events(&events);
         assert_eq!(
-            take_events(&events),
-            [
+            &events[..3],
+            &[
                 Event::Get("hot", "key".to_owned()),
                 Event::Get("warm", "key".to_owned()),
                 Event::Get("cold", "key".to_owned()),
-                Event::Set("warm", "key".to_owned(), 750),
-                Event::Set("hot", "key".to_owned(), 750),
             ]
         );
+        assert!(matches!(
+            &events[3..],
+            [
+                Event::Set("warm", warm_key, warm_ttl),
+                Event::Set("hot", hot_key, hot_ttl),
+            ] if warm_key == "key"
+                && hot_key == "key"
+                && *warm_ttl > 0
+                && *warm_ttl < 60_000
+                && *hot_ttl > 0
+                && *hot_ttl <= *warm_ttl
+        ));
     });
 }
 
@@ -266,6 +289,47 @@ fn first_hit_does_not_backfill_or_read_later_backends() {
             .await
             .expect("lookup should succeed");
         assert_eq!(take_events(&events), [Event::Get("hot", "key".to_owned())]);
+    });
+}
+
+#[test]
+fn elapsed_time_between_backfill_writes_can_skip_the_next_layer() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("hot", RecordingBackend::new("hot", Arc::clone(&events)))
+            .backend(
+                "warm",
+                RecordingBackend::new("warm", Arc::clone(&events))
+                    .delaying_set_return(Duration::from_millis(75)),
+            )
+            .backend(
+                "cold",
+                RecordingBackend::new("cold", Arc::clone(&events)).entry("key", "value", 50),
+            )
+            .build()
+            .expect("cache should build");
+
+        let hit = cache
+            .lookup(&"key".to_owned())
+            .await
+            .expect("lookup should succeed")
+            .expect("cold backend should hit");
+        assert_eq!(hit.backend.as_ref(), "cold");
+
+        let events = take_events(&events);
+        assert_eq!(
+            &events[..3],
+            &[
+                Event::Get("hot", "key".to_owned()),
+                Event::Get("warm", "key".to_owned()),
+                Event::Get("cold", "key".to_owned()),
+            ]
+        );
+        assert!(matches!(
+            &events[3..],
+            [Event::Set("warm", key, ttl)] if key == "key" && *ttl > 0 && *ttl < 50
+        ));
     });
 }
 
@@ -688,7 +752,7 @@ fn batch_preserves_positions_duplicates_and_backfills_each_hit() {
         let events = events();
         let hot = RecordingBackend::new("hot", Arc::clone(&events));
         let cold = RecordingBackend::new("cold", Arc::clone(&events))
-            .entry("a", "A", 500)
+            .entry("a", "A", 50_000)
             .entry("b", "B", -1);
         let cache = Cache::builder()
             .backend("hot", hot)
@@ -713,16 +777,28 @@ fn batch_preserves_positions_duplicates_and_backfills_each_hit() {
                 .collect::<Vec<_>>(),
             [Some("A"), None, Some("A"), Some("B")]
         );
+        let events = take_events(&events);
         assert_eq!(
-            take_events(&events),
-            [
+            &events[..2],
+            &[
                 Event::GetMany("hot", keys.to_vec()),
                 Event::GetMany("cold", keys.to_vec()),
-                Event::Set("hot", "a".to_owned(), 500),
-                Event::Set("hot", "a".to_owned(), 500),
-                Event::Set("hot", "b".to_owned(), -1),
             ]
         );
+        assert!(matches!(
+            &events[2..],
+            [
+                Event::Set("hot", first_key, first_ttl),
+                Event::Set("hot", second_key, second_ttl),
+                Event::Set("hot", forever_key, -1),
+            ] if first_key == "a"
+                && second_key == "a"
+                && forever_key == "b"
+                && *first_ttl > 0
+                && *first_ttl < 50_000
+                && *second_ttl > 0
+                && *second_ttl <= *first_ttl
+        ));
     });
 }
 
@@ -737,7 +813,7 @@ fn batch_mutations_are_reverse_and_preserve_item_order() {
             .expect("cache should build");
         let items = [
             SetItem::new("a".to_owned(), "A".to_owned(), -1),
-            SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+            SetItem::new("b".to_owned(), "B".to_owned(), 500),
         ];
 
         cache
@@ -751,12 +827,39 @@ fn batch_mutations_are_reverse_and_preserve_item_order() {
         assert_eq!(
             take_events(&events),
             [
-                Event::SetMany("cold", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
-                Event::SetMany("hot", vec![("a".to_owned(), -1), ("a".to_owned(), 500)]),
+                Event::SetMany("cold", vec![("a".to_owned(), -1), ("b".to_owned(), 500)]),
+                Event::SetMany("hot", vec![("a".to_owned(), -1), ("b".to_owned(), 500)]),
                 Event::RemoveMany("cold", vec!["a".to_owned(), "a".to_owned()]),
                 Event::RemoveMany("hot", vec!["a".to_owned(), "a".to_owned()]),
             ]
         );
+    });
+}
+
+#[test]
+fn duplicate_batch_write_is_rejected_before_mutation() {
+    block_on(async {
+        let events = events();
+        let cache = Cache::builder()
+            .backend("only", RecordingBackend::new("only", Arc::clone(&events)))
+            .build()
+            .expect("cache should build");
+        let error = cache
+            .set_many(&[
+                SetItem::new("a".to_owned(), "A".to_owned(), -1),
+                SetItem::new("a".to_owned(), "A2".to_owned(), 500),
+            ])
+            .await
+            .expect_err("duplicate batch key must fail");
+
+        assert!(matches!(
+            error,
+            KapeError::DuplicateBatchKey {
+                first_index: 0,
+                duplicate_index: 1,
+            }
+        ));
+        assert!(take_events(&events).is_empty());
     });
 }
 
@@ -786,8 +889,8 @@ fn batch_contract_failures_return_err_without_partial_results() {
             .backend(
                 "cold",
                 RecordingBackend::new("cold", Arc::clone(&backfill_events))
-                    .entry("a", "A", 100)
-                    .entry("b", "B", 200),
+                    .entry("a", "A", 10_000)
+                    .entry("b", "B", 20_000),
             )
             .build()
             .expect("cache should build");
@@ -796,14 +899,18 @@ fn batch_contract_failures_return_err_without_partial_results() {
             .await
             .expect_err("one backfill failure must fail the batch");
         assert_backend_failure(error, Operation::Backfill, "hot");
+        let backfill_events = take_events(&backfill_events);
         assert_eq!(
-            take_events(&backfill_events),
-            [
+            &backfill_events[..2],
+            &[
                 Event::GetMany("hot", vec!["a".to_owned(), "b".to_owned()]),
                 Event::GetMany("cold", vec!["a".to_owned(), "b".to_owned()]),
-                Event::Set("hot", "a".to_owned(), 100),
             ]
         );
+        assert!(matches!(
+            &backfill_events[2..],
+            [Event::Set("hot", key, ttl)] if key == "a" && *ttl > 0 && *ttl < 10_000
+        ));
     });
 }
 

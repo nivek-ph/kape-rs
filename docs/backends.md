@@ -7,7 +7,7 @@ adapter-local.
 | --- | --- | --- | --- |
 | `kape-memory` | Direct `Arc<V>` | Monotonic process clock | One backend instance |
 | `kape-redis` | Codec bytes | Redis PTTL | Caller-owned string prefix |
-| `kape-postgres` | Codec-selected `TEXT` or `BYTEA` | PostgreSQL server clock | Caller-owned string prefix |
+| `kape-postgres` | Codec-selected `TEXT` or `BYTEA` | Application clock for writes; PostgreSQL clock for reads | Caller-owned string prefix |
 
 ## Custom backends
 
@@ -15,8 +15,8 @@ Implement `CacheBackend<K, V>` and return `None` for a miss or
 `Some(CacheEntry)` for a hit. A hit must report `-1` or a positive exact
 remaining TTL. Scalar and batch writes must reject TTL below `-1` before
 mutation; TTL zero must leave no observable entry. Batch reads preserve input
-length, order, and duplicates. `clear` must affect only the backend's documented
-ownership scope.
+length, order, and duplicates. Batch writes must reject duplicate keys before
+mutation. `clear` must affect only the backend's documented ownership scope.
 
 The shared testkit exercises these observable guarantees. Adapter-local native
 batches may reduce transport round trips, but cannot change public semantics.

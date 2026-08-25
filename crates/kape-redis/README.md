@@ -37,8 +37,9 @@ One bounded scan removes entries observed during that traversal; clear is not
 linearizable with concurrent writes to the same namespace.
 
 Reads obtain `GET` and exact `PTTL` in an atomic pipeline. Batch reads preserve
-positions and duplicate keys; batch writes use a transactional pipeline. TTL
-zero is implemented as deletion, avoiding an invalid zero-millisecond `SET`.
+positions and duplicate keys; batch writes reject duplicate keys before using a
+transactional pipeline. TTL zero is implemented as deletion, avoiding an
+invalid zero-millisecond `SET`.
 
 TLS is opt-in through the `native-tls` and `rustls` features. Connection
 lifecycle remains owned by application handles.

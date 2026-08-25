@@ -8,8 +8,10 @@ kape = "0.1.0"
 ```
 
 Backends are named and configured in read order. Reads stop at the first hit
-and backfill earlier backends with its exact remaining TTL. Mutations run in
-reverse configured order. All failures are fail-fast.
+and backfill earlier backends. Before each destination write, Kape reduces a
+finite TTL by elapsed time observed by the core. Time spent inside the
+destination write remains storage-specific. Mutations run in reverse configured
+order. All failures are fail-fast.
 
 ```rust
 use std::sync::Arc;
@@ -64,9 +66,10 @@ invalidates, positive values expire, and values below `-1` are rejected before
 mutation. Hits can report only `-1` or a positive exact remaining TTL.
 
 `lookup_many` and `get_many` preserve input positions and duplicate keys.
-`set_many` and `remove_many` visit backends in reverse order. Any read,
-backfill, write, removal, clear, or loader failure stops the operation. Earlier
-effects remain and are not rolled back.
+`set_many` rejects duplicate keys before mutation. `set_many` and
+`remove_many` visit backends in reverse order. Any read, backfill, write,
+removal, clear, or loader failure stops the operation. Earlier effects remain
+and are not rolled back.
 
 Use `get_or_load(key, loader, ttl)` when the TTL is known before loading. Use
 `wrap(key, loader, ttl)` when the freshly loaded value determines its TTL;

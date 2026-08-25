@@ -9,7 +9,13 @@ pub enum PostgresBackendError {
     /// `PostgreSQL` operation failed.
     #[error("PostgreSQL operation failed: {0}")]
     Sqlx(#[from] sqlx::Error),
-    /// A finite TTL cannot be represented as an absolute `PostgreSQL` timestamp.
+    /// The application host clock is earlier than the Unix epoch.
+    #[error("application system clock is before the Unix epoch")]
+    SystemClockBeforeUnixEpoch(#[source] std::time::SystemTimeError),
+    /// The application host's Unix millisecond timestamp exceeds `i64`.
+    #[error("application Unix millisecond timestamp exceeds i64 range")]
+    TimestampOverflow,
+    /// A finite TTL cannot be represented as an absolute Unix millisecond timestamp.
     #[error("TTL exceeds PostgreSQL millisecond range")]
     TtlOverflow,
     /// A table name was empty, unsafe, or contained more than schema and table.
