@@ -465,31 +465,23 @@ fn remaining_backfill_ttl(remaining_ttl: i64, elapsed: Duration) -> Option<i64> 
         return Some(-1);
     }
 
-    debug_assert!(remaining_ttl > 0);
     let elapsed_ms = elapsed.as_nanos().div_ceil(1_000_000);
-    let remaining_ttl = u128::try_from(remaining_ttl).expect("positive TTL fits in u128");
-    if elapsed_ms >= remaining_ttl {
-        None
-    } else {
-        Some(
-            i64::try_from(remaining_ttl - elapsed_ms)
-                .expect("adjusted TTL cannot exceed the original i64 TTL"),
-        )
-    }
+    let remaining_ttl = u128::try_from(remaining_ttl).ok()?;
+    let adjusted_ttl = remaining_ttl.checked_sub(elapsed_ms)?;
+    i64::try_from(adjusted_ttl).ok().filter(|ttl| *ttl > 0)
 }
 
 fn validate_hit<K, V>(
     layer: &CacheLayer<K, V>,
     entry: CacheEntry<V>,
 ) -> Result<CacheEntry<V>, Error> {
-    if entry.remaining_ttl == -1 || entry.remaining_ttl > 0 {
-        Ok(entry)
-    } else {
-        Err(backend_error(
+    match entry.remaining_ttl {
+        -1 | 1.. => Ok(entry),
+        remaining_ttl => Err(backend_error(
             Operation::Get,
             layer,
-            Error::backend(InvalidRemainingTtlError(entry.remaining_ttl)),
-        ))
+            Error::backend(InvalidRemainingTtlError(remaining_ttl)),
+        )),
     }
 }
 
