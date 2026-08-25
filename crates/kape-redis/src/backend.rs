@@ -207,10 +207,7 @@ where
         pipeline.atomic();
         for (key, value, ttl) in encoded {
             if let Some(value) = value {
-                pipeline
-                    .cmd("SET")
-                    .arg(key)
-                    .arg(value);
+                pipeline.cmd("SET").arg(key).arg(value);
                 if ttl > 0 {
                     pipeline.arg("PX").arg(ttl);
                 }
