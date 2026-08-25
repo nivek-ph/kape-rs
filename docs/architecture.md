@@ -8,7 +8,7 @@ application
     v
 kape::Cache<K, V>
     |
-    +-- configured-order reads and exact-TTL backfill
+    +-- configured-order reads and lifetime-bounded backfill
     +-- reverse-order fail-fast mutations
     |
     +-- kape-memory      typed Arc<V>
@@ -28,8 +28,9 @@ semantics.
 Reads visit backends in configured order. A valid hit has a remaining TTL of
 `-1` or a positive millisecond value. A hit carrying `0` or a value below `-1`
 is a backend contract violation and becomes a named `get` error. A later hit
-is backfilled into every earlier backend, nearest first, using the exact same
-remaining TTL.
+is backfilled into every earlier backend, nearest first. Finite backfill TTLs
+deduct time spent reading and refilling; if the remaining lifetime is exhausted,
+later backfill writes are skipped.
 
 Set, remove, clear, and batch mutations visit backends in reverse order. All
 operations are fail-fast. Kape does not roll back earlier effects, so `Err`

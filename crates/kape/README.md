@@ -8,7 +8,8 @@ kape = "0.1.0"
 ```
 
 Backends are named and configured in read order. Reads stop at the first hit
-and backfill earlier backends with its exact remaining TTL. Mutations run in
+and backfill earlier backends without extending its observed lifetime. Time
+spent reading and refilling is deducted from finite TTLs. Mutations run in
 reverse configured order. All failures are fail-fast.
 
 ```rust

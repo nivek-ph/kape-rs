@@ -1,4 +1,10 @@
-use std::{collections::HashSet, fmt, future::Future, sync::Arc};
+use std::{
+    collections::HashSet,
+    fmt,
+    future::Future,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{
     BackendFailure, CacheBackend, KapeError as Error, Operation, SetItem, write::validate_ttl,
@@ -88,6 +94,7 @@ where
     /// Returns the first named read, contract, or backfill failure.
     pub async fn lookup(&self, key: &K) -> Result<Option<CacheHit<V>>, Error> {
         for (index, layer) in self.inner.layers.iter().enumerate() {
+            let read_started_at = Instant::now();
             let entry = layer
                 .backend
                 .get(key)
@@ -95,7 +102,7 @@ where
                 .map_err(|source| backend_error(Operation::Get, layer, source))?;
             if let Some(entry) = entry {
                 let entry = validate_hit(layer, entry)?;
-                self.backfill(key, &entry, index).await?;
+                self.backfill(key, &entry, index, read_started_at).await?;
                 return Ok(Some(CacheHit {
                     entry,
                     backend: Arc::clone(&layer.name),
@@ -241,6 +248,7 @@ where
                 .iter()
                 .map(|index| &keys[*index])
                 .collect::<Vec<_>>();
+            let read_started_at = Instant::now();
             let results = layer
                 .backend
                 .get_many(&backend_keys)
@@ -253,6 +261,7 @@ where
                     let entry = validate_hit(layer, entry)?;
                     hits[item_index] = Some(LocatedHit {
                         layer_index,
+                        read_started_at,
                         hit: CacheHit {
                             backend: Arc::clone(&layer.name),
                             entry,
@@ -266,8 +275,13 @@ where
             let Some(located) = located else {
                 continue;
             };
-            self.backfill(&keys[item_index], &located.hit.entry, located.layer_index)
-                .await?;
+            self.backfill(
+                &keys[item_index],
+                &located.hit.entry,
+                located.layer_index,
+                located.read_started_at,
+            )
+            .await?;
         }
 
         Ok(hits
@@ -346,11 +360,16 @@ where
         key: &K,
         entry: &CacheEntry<V>,
         hit_index: usize,
+        read_started_at: Instant,
     ) -> Result<(), Error> {
         for layer in self.inner.layers[..hit_index].iter().rev() {
+            let Some(ttl) = remaining_backfill_ttl(entry.remaining_ttl, read_started_at.elapsed())
+            else {
+                break;
+            };
             layer
                 .backend
-                .set(key, Arc::clone(&entry.value), entry.remaining_ttl)
+                .set(key, Arc::clone(&entry.value), ttl)
                 .await
                 .map_err(|source| backend_error(Operation::Backfill, layer, source))?;
         }
@@ -433,7 +452,26 @@ where
 
 struct LocatedHit<V> {
     layer_index: usize,
+    read_started_at: Instant,
     hit: CacheHit<V>,
+}
+
+fn remaining_backfill_ttl(remaining_ttl: i64, elapsed: Duration) -> Option<i64> {
+    if remaining_ttl == -1 {
+        return Some(-1);
+    }
+
+    debug_assert!(remaining_ttl > 0);
+    let elapsed_ms = elapsed.as_nanos().div_ceil(1_000_000);
+    let remaining_ttl = u128::try_from(remaining_ttl).expect("positive TTL fits in u128");
+    if elapsed_ms >= remaining_ttl {
+        None
+    } else {
+        Some(
+            i64::try_from(remaining_ttl - elapsed_ms)
+                .expect("adjusted TTL cannot exceed the original i64 TTL"),
+        )
+    }
 }
 
 fn validate_hit<K, V>(
@@ -509,3 +547,42 @@ impl fmt::Display for BatchResultLengthError {
 }
 
 impl std::error::Error for BatchResultLengthError {}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::remaining_backfill_ttl;
+
+    #[test]
+    fn finite_backfill_ttl_deducts_elapsed_time_conservatively() {
+        assert_eq!(
+            remaining_backfill_ttl(100, Duration::from_nanos(1)),
+            Some(99)
+        );
+        assert_eq!(
+            remaining_backfill_ttl(100, Duration::from_millis(20)),
+            Some(80)
+        );
+    }
+
+    #[test]
+    fn exhausted_backfill_ttl_skips_the_write() {
+        assert_eq!(
+            remaining_backfill_ttl(100, Duration::from_millis(100)),
+            None
+        );
+        assert_eq!(
+            remaining_backfill_ttl(100, Duration::from_millis(101)),
+            None
+        );
+    }
+
+    #[test]
+    fn non_expiring_backfill_ttl_is_unchanged() {
+        assert_eq!(
+            remaining_backfill_ttl(-1, Duration::from_secs(60)),
+            Some(-1)
+        );
+    }
+}

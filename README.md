@@ -15,7 +15,8 @@ let cache = Cache::builder()
 ```
 
 Reads visit backends in configured order. A miss continues; a hit stops and
-refills earlier backends in reverse order with the hit's exact remaining TTL.
+refills earlier backends in reverse order without extending the hit's observed
+lifetime. Time spent reading and refilling is deducted from finite TTLs.
 Writes, removals, batch mutations, and clear visit the chain in reverse order.
 Every failure stops immediately and identifies the operation and backend.
 

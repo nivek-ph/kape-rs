@@ -9,7 +9,8 @@ mutation:  memory <- Redis <- PostgreSQL
 ```
 
 A read miss continues, a hit stops, and a failure returns immediately. A later
-hit backfills earlier backends with the exact remaining TTL. Mutations visit
+hit backfills earlier backends without extending its observed lifetime. Time
+spent reading and refilling is deducted from finite TTLs. Mutations visit
 the chain in reverse configured order and also stop on the first failure.
 
 Serialization remains adapter-local: memory stores `Arc<V>`, while Redis and
