@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use kape::{CacheBackend, CacheEntry, KapeError, SetItem};
+use kape::{CacheBackend, CacheEntry, KapeError, KapeResult, SetItem};
 
 #[derive(Default)]
 struct ScalarBackend {
@@ -13,7 +13,7 @@ struct ScalarBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for ScalarBackend {
-    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
+    async fn get(&self, key: &String) -> KapeResult<Option<CacheEntry<String>>> {
         Ok(self
             .entries
             .lock()
@@ -23,7 +23,7 @@ impl CacheBackend<String, String> for ScalarBackend {
             .map(|value| CacheEntry::new(value, -1)))
     }
 
-    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> KapeResult<()> {
         if key == "fail" {
             return Err(KapeError::backend(std::io::Error::other("set failed")));
         }
@@ -36,7 +36,7 @@ impl CacheBackend<String, String> for ScalarBackend {
         Ok(())
     }
 
-    async fn remove(&self, key: &String) -> Result<(), KapeError> {
+    async fn remove(&self, key: &String) -> KapeResult<()> {
         self.entries
             .lock()
             .expect("entries mutex poisoned")
@@ -44,7 +44,7 @@ impl CacheBackend<String, String> for ScalarBackend {
         Ok(())
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         self.entries.lock().expect("entries mutex poisoned").clear();
         Ok(())
     }

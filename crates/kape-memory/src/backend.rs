@@ -1,7 +1,7 @@
 use std::{hash::Hash, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError};
+use kape::{CacheBackend, CacheEntry, KapeError, KapeResult};
 use moka::future::Cache;
 
 use crate::MemoryError;
@@ -56,7 +56,7 @@ where
     K: Clone + Eq + Hash + Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
+    async fn get(&self, key: &K) -> KapeResult<Option<CacheEntry<V>>> {
         let Some(entry) = self.cache.get(key).await else {
             return Ok(None);
         };
@@ -79,7 +79,7 @@ where
         Ok(Some(CacheEntry::new(entry.value, remaining_ttl)))
     }
 
-    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> KapeResult<()> {
         if ttl < -1 {
             return Err(KapeError::InvalidTtl(ttl));
         }
@@ -105,12 +105,12 @@ where
         Ok(())
     }
 
-    async fn remove(&self, key: &K) -> Result<(), KapeError> {
+    async fn remove(&self, key: &K) -> KapeResult<()> {
         self.cache.invalidate(key).await;
         Ok(())
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         self.cache.invalidate_all();
         self.cache.run_pending_tasks().await;
         Ok(())

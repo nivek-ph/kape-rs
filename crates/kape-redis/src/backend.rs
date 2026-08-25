@@ -1,7 +1,7 @@
 use std::{hash::Hash, marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError, SetItem, validate_set_items};
+use kape::{CacheBackend, CacheEntry, KapeError, KapeResult, SetItem, validate_set_items};
 use redis::aio::ConnectionManager;
 
 use crate::{RedisBackendError, RedisCodec, StringCodec};
@@ -34,7 +34,7 @@ impl<K, V> RedisBackend<K, V> {
     /// # Errors
     ///
     /// Returns a backend error when the URL or initial connection fails.
-    pub async fn connect(url: &str) -> Result<Self, KapeError> {
+    pub async fn connect(url: &str) -> KapeResult<Self> {
         let client = redis::Client::open(url).map_err(RedisBackendError::Redis)?;
         let connection = ConnectionManager::new(client)
             .await
@@ -105,7 +105,7 @@ where
     V: Send + Sync,
     C: RedisCodec<K, V>,
 {
-    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
+    async fn get(&self, key: &K) -> KapeResult<Option<CacheEntry<V>>> {
         let key = self.encode_key(key)?;
         let mut connection = self.connection.clone();
         let mut pipeline = redis::pipe();
@@ -117,7 +117,7 @@ where
         crate::lookup::decode_lookup(&self.codec, bytes.as_deref(), pttl).map_err(Into::into)
     }
 
-    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> KapeResult<()> {
         if ttl < -1 {
             return Err(KapeError::InvalidTtl(ttl));
         }
@@ -140,7 +140,7 @@ where
         Ok(())
     }
 
-    async fn remove(&self, key: &K) -> Result<(), KapeError> {
+    async fn remove(&self, key: &K) -> KapeResult<()> {
         let key = self.encode_key(key)?;
         let mut connection = self.connection.clone();
         redis::cmd("DEL")
@@ -151,7 +151,7 @@ where
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Option<CacheEntry<V>>>, KapeError> {
+    async fn get_many(&self, keys: &[&K]) -> KapeResult<Vec<Option<CacheEntry<V>>>> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -183,7 +183,7 @@ where
             .collect()
     }
 
-    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError>
+    async fn set_many(&self, items: &[SetItem<&K, V>]) -> KapeResult<()>
     where
         K: Eq + Hash,
     {
@@ -223,7 +223,7 @@ where
         Ok(())
     }
 
-    async fn remove_many(&self, keys: &[&K]) -> Result<(), KapeError> {
+    async fn remove_many(&self, keys: &[&K]) -> KapeResult<()> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -240,7 +240,7 @@ where
         Ok(())
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         let mut pattern = self.prefix();
         pattern.push(b'*');
         let mut connection = self.connection.clone();

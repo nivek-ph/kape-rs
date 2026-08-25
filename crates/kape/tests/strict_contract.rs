@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use kape::{Cache, CacheBackend, CacheEntry, KapeError};
+use kape::{Cache, CacheBackend, CacheEntry, KapeError, KapeResult};
 
 type Entries = Arc<Mutex<HashMap<String, (Arc<String>, i64)>>>;
 
@@ -15,7 +15,7 @@ struct TestBackend {
 
 #[async_trait::async_trait]
 impl CacheBackend<String, String> for TestBackend {
-    async fn get(&self, key: &String) -> Result<Option<CacheEntry<String>>, KapeError> {
+    async fn get(&self, key: &String) -> KapeResult<Option<CacheEntry<String>>> {
         Ok(self
             .entries
             .lock()
@@ -24,7 +24,7 @@ impl CacheBackend<String, String> for TestBackend {
             .map(|(value, remaining_ttl)| CacheEntry::new(Arc::clone(value), *remaining_ttl)))
     }
 
-    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &String, value: Arc<String>, ttl: i64) -> KapeResult<()> {
         let mut entries = self.entries.lock().expect("test backend mutex poisoned");
         if ttl == 0 {
             entries.remove(key);
@@ -34,7 +34,7 @@ impl CacheBackend<String, String> for TestBackend {
         Ok(())
     }
 
-    async fn remove(&self, key: &String) -> Result<(), KapeError> {
+    async fn remove(&self, key: &String) -> KapeResult<()> {
         self.entries
             .lock()
             .expect("test backend mutex poisoned")
@@ -42,7 +42,7 @@ impl CacheBackend<String, String> for TestBackend {
         Ok(())
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         self.entries
             .lock()
             .expect("test backend mutex poisoned")

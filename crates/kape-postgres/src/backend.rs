@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError, SetItem, validate_set_items};
+use kape::{CacheBackend, CacheEntry, KapeError, KapeResult, SetItem, validate_set_items};
 use sqlx::{AssertSqlSafe, PgPool, Postgres, Row, Transaction};
 
 use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec};
@@ -70,7 +70,7 @@ impl<K, V, C> PostgresBackend<K, V, C> {
     /// # Errors
     ///
     /// Returns an error for unsafe or unsupported identifiers.
-    pub fn with_table(mut self, table: &str) -> Result<Self, KapeError> {
+    pub fn with_table(mut self, table: &str) -> KapeResult<Self> {
         self.table = validate_table_name(table)
             .ok_or_else(|| PostgresBackendError::InvalidTableName(table.to_owned()))?;
         Ok(self)
@@ -105,7 +105,7 @@ where
     /// # Errors
     ///
     /// Returns a backend error when `PostgreSQL` rejects the operation.
-    pub async fn purge_expired(&self) -> Result<u64, KapeError> {
+    pub async fn purge_expired(&self) -> KapeResult<u64> {
         let prefix = self.namespace_prefix();
         let statement = format!(
             "DELETE FROM {} \
@@ -130,7 +130,7 @@ where
     V: Send + Sync,
     C: PostgresCodec<K, V>,
 {
-    async fn get(&self, key: &K) -> Result<Option<CacheEntry<V>>, KapeError> {
+    async fn get(&self, key: &K) -> KapeResult<Option<CacheEntry<V>>> {
         let key = self.encode_key(key)?;
         let statement = format!(
             "SELECT value, CASE WHEN expires_at_ms IS NULL THEN NULL \
@@ -153,7 +153,7 @@ where
         crate::lookup::decode_lookup(&self.codec, Some(value), remaining_ms).map_err(Into::into)
     }
 
-    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> Result<(), KapeError> {
+    async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> KapeResult<()> {
         validate_ttl(ttl)?;
         if ttl == 0 {
             return self.remove(key).await;
@@ -172,7 +172,7 @@ where
         upsert(&self.pool, &self.table, key, value, expires_at_ms).await
     }
 
-    async fn remove(&self, key: &K) -> Result<(), KapeError> {
+    async fn remove(&self, key: &K) -> KapeResult<()> {
         let key = self.encode_key(key)?;
         let statement = format!("DELETE FROM {} WHERE key = $1", self.table);
         sqlx::query(AssertSqlSafe(statement))
@@ -183,7 +183,7 @@ where
         Ok(())
     }
 
-    async fn get_many(&self, keys: &[&K]) -> Result<Vec<Option<CacheEntry<V>>>, KapeError> {
+    async fn get_many(&self, keys: &[&K]) -> KapeResult<Vec<Option<CacheEntry<V>>>> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -219,7 +219,7 @@ where
             .map_err(Into::into)
     }
 
-    async fn set_many(&self, items: &[SetItem<&K, V>]) -> Result<(), KapeError>
+    async fn set_many(&self, items: &[SetItem<&K, V>]) -> KapeResult<()>
     where
         K: Eq + Hash,
     {
@@ -287,7 +287,7 @@ where
         }
     }
 
-    async fn remove_many(&self, keys: &[&K]) -> Result<(), KapeError> {
+    async fn remove_many(&self, keys: &[&K]) -> KapeResult<()> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -298,7 +298,7 @@ where
         delete_many(&self.pool, &self.table, keys).await
     }
 
-    async fn clear(&self) -> Result<(), KapeError> {
+    async fn clear(&self) -> KapeResult<()> {
         let prefix = self.namespace_prefix();
         let statement = format!(
             "DELETE FROM {} WHERE substring(key from 1 for length($1)) = $1",
@@ -313,7 +313,7 @@ where
     }
 }
 
-fn validate_ttl(ttl: i64) -> Result<(), KapeError> {
+fn validate_ttl(ttl: i64) -> KapeResult<()> {
     if ttl < -1 {
         Err(KapeError::InvalidTtl(ttl))
     } else {
@@ -335,7 +335,7 @@ async fn upsert<K, V>(
     key: K,
     value: V,
     expires_at_ms: Option<i64>,
-) -> Result<(), KapeError>
+) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
@@ -357,7 +357,7 @@ async fn upsert_many<K, V>(
     keys: Vec<K>,
     values: Vec<V>,
     expires_at_ms: Vec<Option<i64>>,
-) -> Result<(), KapeError>
+) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
@@ -379,7 +379,7 @@ async fn upsert_many_in_transaction<K, V>(
     keys: Vec<K>,
     values: Vec<V>,
     expires_at_ms: Vec<Option<i64>>,
-) -> Result<(), KapeError>
+) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
@@ -396,7 +396,7 @@ where
 }
 
 /// Deletes multiple keys.
-async fn delete_many<K>(pool: &PgPool, table: &str, keys: Vec<K>) -> Result<(), KapeError>
+async fn delete_many<K>(pool: &PgPool, table: &str, keys: Vec<K>) -> KapeResult<()>
 where
     K: PostgresValue,
 {
@@ -414,7 +414,7 @@ async fn delete_many_in_transaction<K>(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
     keys: Vec<K>,
-) -> Result<(), KapeError>
+) -> KapeResult<()>
 where
     K: PostgresValue,
 {
