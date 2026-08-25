@@ -325,8 +325,8 @@ fn validate_ttl(ttl: i64) -> Result<(), KapeError> {
 fn unix_now_ms() -> Result<i64, PostgresBackendError> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| PostgresBackendError::TtlOverflow)?;
-    i64::try_from(elapsed.as_millis()).map_err(|_| PostgresBackendError::TtlOverflow)
+        .map_err(PostgresBackendError::SystemClockBeforeUnixEpoch)?;
+    i64::try_from(elapsed.as_millis()).map_err(|_| PostgresBackendError::TimestampOverflow)
 }
 
 async fn upsert<K, V>(
