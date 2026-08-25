@@ -6,10 +6,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kape::{CacheBackend, CacheEntry, KapeError, KapeResult, SetItem, validate_set_items};
+use kape::{CacheBackend, CacheEntry, KapeResult, SetItem, validate_set_items};
 use sqlx::{AssertSqlSafe, PgPool, Postgres, Row, Transaction};
 
-use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec};
+use crate::mutation::{MutationPlan, MutationPlanner, PlannedSet, PlannedUpsert};
+use crate::{PostgresBackendError, PostgresCodec, PostgresKey, PostgresValue, StringCodec, codec};
 
 /// A PostgreSQL-backed cache adapter.
 pub struct PostgresBackend<K = String, V = String, C = StringCodec> {
@@ -93,8 +94,7 @@ where
     }
 
     fn encode_key(&self, key: &K) -> Result<C::EncodedKey, PostgresBackendError> {
-        let encoded = self.codec.encode_key(key)?;
-        Ok(C::EncodedKey::join(self.namespace_prefix(), encoded))
+        codec::encode_namespaced_key(&self.codec, &self.namespace, key)
     }
 
     /// Deletes expired rows owned by this namespace.
@@ -154,33 +154,17 @@ where
     }
 
     async fn set(&self, key: &K, value: Arc<V>, ttl: i64) -> KapeResult<()> {
-        validate_ttl(ttl)?;
-        if ttl == 0 {
-            return self.remove(key).await;
+        let now_ms = (ttl > 0).then(unix_now_ms).transpose()?;
+        let planner = MutationPlanner::new(&self.codec, &self.namespace);
+        match planner.plan_set(key, value.as_ref(), ttl, now_ms)? {
+            PlannedSet::Upsert(plan) => upsert(&self.pool, &self.table, plan).await,
+            PlannedSet::Delete(key) => delete_one(&self.pool, &self.table, key).await,
         }
-        let key = self.encode_key(key)?;
-        let value = self.codec.encode_value(value.as_ref())?;
-        let expires_at_ms = if ttl == -1 {
-            None
-        } else {
-            Some(
-                unix_now_ms()?
-                    .checked_add(ttl)
-                    .ok_or(PostgresBackendError::TtlOverflow)?,
-            )
-        };
-        upsert(&self.pool, &self.table, key, value, expires_at_ms).await
     }
 
     async fn remove(&self, key: &K) -> KapeResult<()> {
         let key = self.encode_key(key)?;
-        let statement = format!("DELETE FROM {} WHERE key = $1", self.table);
-        sqlx::query(AssertSqlSafe(statement))
-            .bind(key)
-            .execute(&self.pool)
-            .await
-            .map_err(PostgresBackendError::Sqlx)?;
-        Ok(())
+        delete_one(&self.pool, &self.table, key).await
     }
 
     async fn get_many(&self, keys: &[&K]) -> KapeResult<Vec<Option<CacheEntry<V>>>> {
@@ -228,55 +212,25 @@ where
             return Ok(());
         }
 
-        let now = items
+        let now_ms = items
             .iter()
             .any(|item| item.ttl > 0)
             .then(unix_now_ms)
             .transpose()?;
-        let mut upsert_keys = Vec::with_capacity(items.len());
-        let mut values = Vec::with_capacity(items.len());
-        let mut expires_at = Vec::with_capacity(items.len());
-        let mut delete_keys = Vec::new();
+        let MutationPlan { upserts, deletes } =
+            MutationPlanner::new(&self.codec, &self.namespace).plan_many(items, now_ms)?;
 
-        for item in items {
-            let key = self.encode_key(item.key)?;
-            if item.ttl == 0 {
-                delete_keys.push(key);
-                continue;
-            }
-
-            let expires_at_ms = match item.ttl {
-                -1 => None,
-                ttl => Some(
-                    now.and_then(|now| now.checked_add(ttl))
-                        .ok_or(PostgresBackendError::TtlOverflow)?,
-                ),
-            };
-            upsert_keys.push(key);
-            values.push(self.codec.encode_value(item.value.as_ref())?);
-            expires_at.push(expires_at_ms);
-        }
-
-        match (upsert_keys.is_empty(), delete_keys.is_empty()) {
-            (false, true) => {
-                upsert_many(&self.pool, &self.table, upsert_keys, values, expires_at).await
-            }
-            (true, false) => delete_many(&self.pool, &self.table, delete_keys).await,
+        match (upserts.is_empty(), deletes.is_empty()) {
+            (false, true) => upsert_many(&self.pool, &self.table, upserts).await,
+            (true, false) => delete_many(&self.pool, &self.table, deletes).await,
             (false, false) => {
                 let mut transaction = self
                     .pool
                     .begin()
                     .await
                     .map_err(PostgresBackendError::Sqlx)?;
-                upsert_many_in_transaction(
-                    &mut transaction,
-                    &self.table,
-                    upsert_keys,
-                    values,
-                    expires_at,
-                )
-                .await?;
-                delete_many_in_transaction(&mut transaction, &self.table, delete_keys).await?;
+                upsert_many_in_transaction(&mut transaction, &self.table, upserts).await?;
+                delete_many_in_transaction(&mut transaction, &self.table, deletes).await?;
                 transaction
                     .commit()
                     .await
@@ -313,14 +267,6 @@ where
     }
 }
 
-fn validate_ttl(ttl: i64) -> KapeResult<()> {
-    if ttl < -1 {
-        Err(KapeError::InvalidTtl(ttl))
-    } else {
-        Ok(())
-    }
-}
-
 /// Returns the application host's current Unix timestamp in milliseconds.
 fn unix_now_ms() -> Result<i64, PostgresBackendError> {
     let elapsed = SystemTime::now()
@@ -329,17 +275,16 @@ fn unix_now_ms() -> Result<i64, PostgresBackendError> {
     i64::try_from(elapsed.as_millis()).map_err(|_| PostgresBackendError::TimestampOverflow)
 }
 
-async fn upsert<K, V>(
-    pool: &PgPool,
-    table: &str,
-    key: K,
-    value: V,
-    expires_at_ms: Option<i64>,
-) -> KapeResult<()>
+async fn upsert<K, V>(pool: &PgPool, table: &str, upsert: PlannedUpsert<K, V>) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
 {
+    let PlannedUpsert {
+        key,
+        value,
+        expires_at_ms,
+    } = upsert;
     let statement = upsert_statement(table);
     sqlx::query(AssertSqlSafe(statement))
         .bind(key)
@@ -354,15 +299,14 @@ where
 async fn upsert_many<K, V>(
     pool: &PgPool,
     table: &str,
-    keys: Vec<K>,
-    values: Vec<V>,
-    expires_at_ms: Vec<Option<i64>>,
+    upserts: Vec<PlannedUpsert<K, V>>,
 ) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
 {
     let statement = upsert_many_statement::<K, V>(table);
+    let (keys, values, expires_at_ms) = sql_upsert_arrays(upserts);
     sqlx::query(AssertSqlSafe(statement))
         .bind(keys)
         .bind(values)
@@ -376,20 +320,46 @@ where
 async fn upsert_many_in_transaction<K, V>(
     transaction: &mut Transaction<'_, Postgres>,
     table: &str,
-    keys: Vec<K>,
-    values: Vec<V>,
-    expires_at_ms: Vec<Option<i64>>,
+    upserts: Vec<PlannedUpsert<K, V>>,
 ) -> KapeResult<()>
 where
     K: PostgresValue,
     V: PostgresValue,
 {
     let statement = upsert_many_statement::<K, V>(table);
+    let (keys, values, expires_at_ms) = sql_upsert_arrays(upserts);
     sqlx::query(AssertSqlSafe(statement))
         .bind(keys)
         .bind(values)
         .bind(expires_at_ms)
         .execute(&mut **transaction)
+        .await
+        .map_err(PostgresBackendError::Sqlx)?;
+    Ok(())
+}
+
+fn sql_upsert_arrays<K, V>(
+    upserts: Vec<PlannedUpsert<K, V>>,
+) -> (Vec<K>, Vec<V>, Vec<Option<i64>>) {
+    let mut keys = Vec::with_capacity(upserts.len());
+    let mut values = Vec::with_capacity(upserts.len());
+    let mut expires_at_ms = Vec::with_capacity(upserts.len());
+    for upsert in upserts {
+        keys.push(upsert.key);
+        values.push(upsert.value);
+        expires_at_ms.push(upsert.expires_at_ms);
+    }
+    (keys, values, expires_at_ms)
+}
+
+async fn delete_one<K>(pool: &PgPool, table: &str, key: K) -> KapeResult<()>
+where
+    K: PostgresValue,
+{
+    let statement = format!("DELETE FROM {table} WHERE key = $1");
+    sqlx::query(AssertSqlSafe(statement))
+        .bind(key)
+        .execute(pool)
         .await
         .map_err(PostgresBackendError::Sqlx)?;
     Ok(())

@@ -114,6 +114,21 @@ pub trait PostgresCodec<K, V>: Send + Sync + 'static {
     fn decode_value(&self, value: Self::EncodedValue) -> Result<V, PostgresBackendError>;
 }
 
+pub(crate) fn encode_namespaced_key<K, V, C>(
+    codec: &C,
+    namespace: &str,
+    key: &K,
+) -> Result<C::EncodedKey, PostgresBackendError>
+where
+    C: PostgresCodec<K, V>,
+{
+    let encoded = codec.encode_key(key)?;
+    Ok(C::EncodedKey::join(
+        C::EncodedKey::namespace_prefix(namespace),
+        encoded,
+    ))
+}
+
 /// Identity codec for `String` keys and values stored in `TEXT` columns.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StringCodec;
