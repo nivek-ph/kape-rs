@@ -1,8 +1,8 @@
 use std::{future::Future, hash::Hash, sync::Arc};
 
 use crate::{
-    BackendFailure, CacheBackend, KapeError, KapeResult, Operation, SetItem, validate_set_items,
-    set::validate_ttl,
+    BackendFailure, CacheBackend, KapeError, KapeResult, Operation, SetItem, set::validate_ttl,
+    validate_set_items,
 };
 
 pub(super) struct ChainLink<K, V> {
