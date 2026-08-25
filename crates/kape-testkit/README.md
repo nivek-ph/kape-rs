@@ -10,7 +10,7 @@ runs explicit. `get_random_string` supplies unique keys for examples and tests.
 
 ```toml
 [dev-dependencies]
-kape-testkit = "0.1.0-alpha.1"
+kape-testkit = "0.1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 ```
 
