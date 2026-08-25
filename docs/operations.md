@@ -7,8 +7,9 @@
 - `set`, `remove`, and `clear` visit backends in reverse order.
 
 A miss continues. A hit stops later reads and backfills earlier backends in
-reverse order without extending its observed lifetime. Time spent reading and
-refilling is deducted from finite TTLs. Read and backfill failures return
+reverse order. Before each destination write, the core deducts elapsed read and
+completed-backfill time from finite TTLs. Time spent inside the current
+destination write remains storage-specific. Read and backfill failures return
 `Err`; absence alone is an `Ok` miss.
 
 Mutations stop at the first failure. Earlier backend effects remain. There is

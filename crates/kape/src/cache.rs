@@ -456,6 +456,10 @@ struct LocatedHit<V> {
     hit: CacheHit<V>,
 }
 
+/// Computes the relative TTL immediately before a destination write is invoked.
+///
+/// A backend may apply that TTL later during `set`; its internal write latency
+/// remains storage-specific and is not observable by the core in advance.
 fn remaining_backfill_ttl(remaining_ttl: i64, elapsed: Duration) -> Option<i64> {
     if remaining_ttl == -1 {
         return Some(-1);
@@ -580,9 +584,6 @@ mod tests {
 
     #[test]
     fn non_expiring_backfill_ttl_is_unchanged() {
-        assert_eq!(
-            remaining_backfill_ttl(-1, Duration::from_secs(60)),
-            Some(-1)
-        );
+        assert_eq!(remaining_backfill_ttl(-1, Duration::from_mins(1)), Some(-1));
     }
 }

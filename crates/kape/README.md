@@ -8,9 +8,10 @@ kape = "0.1.0"
 ```
 
 Backends are named and configured in read order. Reads stop at the first hit
-and backfill earlier backends without extending its observed lifetime. Time
-spent reading and refilling is deducted from finite TTLs. Mutations run in
-reverse configured order. All failures are fail-fast.
+and backfill earlier backends. Before each destination write, Kape reduces a
+finite TTL by elapsed time observed by the core. Time spent inside the
+destination write remains storage-specific. Mutations run in reverse configured
+order. All failures are fail-fast.
 
 ```rust
 use std::sync::Arc;

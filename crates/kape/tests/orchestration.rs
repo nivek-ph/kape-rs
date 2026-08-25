@@ -31,7 +31,7 @@ struct RecordingBackend {
     events: Arc<Mutex<Vec<Event>>>,
     failures: HashSet<&'static str>,
     wrong_batch_len: bool,
-    set_delay: Option<Duration>,
+    set_return_delay: Option<Duration>,
 }
 
 impl RecordingBackend {
@@ -42,7 +42,7 @@ impl RecordingBackend {
             events,
             failures: HashSet::new(),
             wrong_batch_len: false,
-            set_delay: None,
+            set_return_delay: None,
         }
     }
 
@@ -64,8 +64,8 @@ impl RecordingBackend {
         self
     }
 
-    fn delaying_set(mut self, delay: Duration) -> Self {
-        self.set_delay = Some(delay);
+    fn delaying_set_return(mut self, delay: Duration) -> Self {
+        self.set_return_delay = Some(delay);
         self
     }
 
@@ -112,14 +112,15 @@ impl CacheBackend<String, String> for RecordingBackend {
         if self.failures.contains("set") {
             return Err(KapeError::backend(TestError("set failed")));
         }
-        if let Some(delay) = self.set_delay {
-            std::thread::sleep(delay);
-        }
         let mut entries = self.entries.lock().expect("entries mutex poisoned");
         if ttl == 0 {
             entries.remove(key);
         } else {
             entries.insert(key.clone(), CacheEntry::new(value, ttl));
+        }
+        drop(entries);
+        if let Some(delay) = self.set_return_delay {
+            std::thread::sleep(delay);
         }
         Ok(())
     }
@@ -220,7 +221,7 @@ impl fmt::Display for TestError {
 impl std::error::Error for TestError {}
 
 #[test]
-fn reads_in_order_and_backfills_in_reverse_without_extending_ttl() {
+fn reads_in_order_and_deducts_elapsed_time_before_each_backfill_write() {
     block_on(async {
         let events = events();
         let hot = RecordingBackend::new("hot", Arc::clone(&events));
@@ -292,7 +293,7 @@ fn first_hit_does_not_backfill_or_read_later_backends() {
 }
 
 #[test]
-fn exhausted_ttl_stops_backfill_before_the_next_layer() {
+fn elapsed_time_between_backfill_writes_can_skip_the_next_layer() {
     block_on(async {
         let events = events();
         let cache = Cache::builder()
@@ -300,7 +301,7 @@ fn exhausted_ttl_stops_backfill_before_the_next_layer() {
             .backend(
                 "warm",
                 RecordingBackend::new("warm", Arc::clone(&events))
-                    .delaying_set(Duration::from_millis(75)),
+                    .delaying_set_return(Duration::from_millis(75)),
             )
             .backend(
                 "cold",

@@ -2,7 +2,7 @@
 
 Runnable, non-publishable packages live under `examples/`:
 
-- `memory`: lookup metadata, lifetime-bounded backfill, and fixed and value-dependent loaders;
+- `memory`: lookup metadata, elapsed-adjusted backfill, and fixed and value-dependent loaders;
 - `custom`: a normal backend using the public scalar contract;
 - `redis`: URL construction, readable namespace keys, and finite TTL;
 - `postgres`: application-owned pool and externally provisioned schema;
