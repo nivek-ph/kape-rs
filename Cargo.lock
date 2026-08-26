@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "kape-example-custom"
-version = "0.1.1"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "kape",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "kape-example-layered"
-version = "0.1.1"
+version = "0.0.0"
 dependencies = [
  "dotenvy",
  "kape",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "kape-example-memory"
-version = "0.1.1"
+version = "0.0.0"
 dependencies = [
  "kape",
  "kape-memory",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "kape-example-postgres"
-version = "0.1.1"
+version = "0.0.0"
 dependencies = [
  "dotenvy",
  "kape",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "kape-example-redis"
-version = "0.1.1"
+version = "0.0.0"
 dependencies = [
  "dotenvy",
  "kape",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "kape-memory"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "kape",
