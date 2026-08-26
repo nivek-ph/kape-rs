@@ -1,5 +1,7 @@
 # Kape
 
+![Kape: composable, type-safe cache chains for Rust](docs/assets/kape.svg)
+
 Composable, type-safe cache chains for Rust.
 
 Kape keeps cache orchestration small and explicit: applications configure one
@@ -20,6 +22,33 @@ reduces a finite TTL by elapsed time observed by the core. Time spent inside
 the destination write remains storage-specific.
 Writes, removals, batch mutations, and clear visit the chain in reverse order.
 Every failure stops immediately and identifies the operation and backend.
+
+## Cache-aside loading
+
+Use `wrap` when the freshly loaded value determines how long it should remain
+cached. The loader and TTL selector run only after a cache miss:
+
+```rust
+let profile = cache
+    .wrap(
+        &"profile".to_owned(),
+        || async { Ok::<_, std::io::Error>("premium".to_owned()) },
+        |value| {
+            if value == "premium" {
+                300_000
+            } else {
+                60_000
+            }
+        },
+    )
+    .await?;
+
+assert_eq!(profile.as_str(), "premium");
+```
+
+On a miss, Kape loads the value, derives and validates its TTL, then writes it
+through the same fail-fast cache chain. Use `get_or_load` when the TTL is known
+before loading.
 
 ## TTL contract
 
