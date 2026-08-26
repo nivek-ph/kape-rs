@@ -1,10 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use kape::CacheBackend;
 use kape_memory::MemoryBackend;
 use kape_testkit::{
     assert_backend_contract, assert_batch_contract, assert_clear_contract, assert_expiring_contract,
 };
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn satisfies_backend_contract() {
@@ -81,4 +83,35 @@ async fn capacity_is_an_entry_count_upper_bound() {
         tokio::task::yield_now().await;
     }
     panic!("memory backend retained more entries than its capacity");
+}
+
+#[tokio::test]
+async fn replacing_a_value_replaces_its_expiry() {
+    let backend = MemoryBackend::<String, String>::new(10);
+    let key = "key".to_owned();
+
+    backend
+        .set(&key, Arc::new("immortal".to_owned()), -1)
+        .await
+        .unwrap();
+    backend
+        .set(&key, Arc::new("finite".to_owned()), 10)
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(35)).await;
+    assert!(backend.get(&key).await.unwrap().is_none());
+
+    backend
+        .set(&key, Arc::new("finite".to_owned()), 10)
+        .await
+        .unwrap();
+    backend
+        .set(&key, Arc::new("immortal".to_owned()), -1)
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(35)).await;
+    assert!(matches!(
+        backend.get(&key).await.unwrap(),
+        Some(entry) if entry.value.as_str() == "immortal" && entry.remaining_ttl == -1
+    ));
 }
