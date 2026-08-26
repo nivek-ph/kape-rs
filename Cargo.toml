@@ -10,7 +10,6 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -26,11 +25,11 @@ pedantic = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 # Internal dependencies
-kape = { path = "crates/kape", version = "0.2.0" }
-kape-memory = { path = "crates/kape-memory", version = "0.2.0" }
-kape-postgres = { path = "crates/kape-postgres", version = "0.2.0" }
-kape-redis = { path = "crates/kape-redis", version = "0.2.0" }
-kape-testkit = { path = "crates/kape-testkit", version = "0.2.0" }
+kape = { path = "crates/kape", version = "0.1.1" }
+kape-memory = { path = "crates/kape-memory", version = "0.1.2" }
+kape-postgres = { path = "crates/kape-postgres", version = "0.1.1" }
+kape-redis = { path = "crates/kape-redis", version = "0.1.1" }
+kape-testkit = { path = "crates/kape-testkit", version = "0.1.1" }
 
 # External dependencies
 async-trait = "0.1.92"

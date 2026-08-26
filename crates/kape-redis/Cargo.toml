@@ -1,7 +1,7 @@
 [package]
 name = "kape-redis"
 description = "Redis backend adapter for Kape."
-version.workspace = true
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
