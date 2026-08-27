@@ -17,6 +17,7 @@ changelog_update = false
 
 # Protect breaking commits from being released
 # https://release-plz.dev/docs/config#the-protect_breaking_commits-field
+[changelog]
 protect_breaking_commits = true
 
 # Sort commits by newest first
