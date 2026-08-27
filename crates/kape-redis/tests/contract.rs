@@ -2,9 +2,7 @@ use std::{fmt, sync::Arc};
 
 use kape::{Cache, CacheBackend, KapeError, Operation};
 use kape_redis::{RedisBackend, RedisBackendError, RedisCodec, StringCodec};
-use kape_testkit::{
-    assert_backend_contract, assert_batch_contract, assert_clear_contract, assert_expiring_contract,
-};
+use kape_testkit::assert_adapter_contract;
 use redis::aio::ConnectionManager;
 
 #[derive(Debug)]
@@ -59,17 +57,7 @@ async fn satisfies_backend_contract() {
         .await
         .expect("URL backend cleanup failed");
 
-    assert_backend_contract(&backend, &"round-trip".to_owned(), String::new()).await;
-    assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 100).await;
-    assert_batch_contract(
-        &backend,
-        &"batch-first".to_owned(),
-        &"batch-second".to_owned(),
-        &"batch-missing".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
+    assert_adapter_contract(&backend, 100).await;
 
     let codec_cache = Cache::builder()
         .backend(
@@ -112,13 +100,4 @@ async fn satisfies_backend_contract() {
     let protected_hit = protected.get(&"protected".to_owned()).await.unwrap();
     assert!(protected_hit.is_some());
     protected.clear().await.expect("protected cleanup failed");
-
-    assert_clear_contract(
-        &backend,
-        &"clear-first".to_owned(),
-        &"clear-second".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
 }

@@ -26,6 +26,41 @@ pub fn get_random_string() -> String {
         .collect()
 }
 
+/// Checks the complete public adapter contract using canonical string fixtures.
+///
+/// This covers scalar and batch behavior, expiry, removal, and clear. Use the
+/// granular contract helpers when an adapter uses other key or value types.
+///
+/// # Panics
+///
+/// Panics when `ttl_ms` is not positive or the backend violates the public
+/// adapter contract.
+pub async fn assert_adapter_contract<B>(backend: &B, ttl_ms: i64)
+where
+    B: CacheBackend<String, String>,
+{
+    assert!(ttl_ms > 0, "contract TTL must be positive");
+    assert_backend_contract(backend, &"contract".to_owned(), String::new()).await;
+    assert_expiring_contract(backend, &"ttl".to_owned(), "value".to_owned(), ttl_ms).await;
+    assert_batch_contract(
+        backend,
+        &"batch-first".to_owned(),
+        &"batch-second".to_owned(),
+        &"batch-missing".to_owned(),
+        "first".to_owned(),
+        "second".to_owned(),
+    )
+    .await;
+    assert_clear_contract(
+        backend,
+        &"clear-first".to_owned(),
+        &"clear-second".to_owned(),
+        "first".to_owned(),
+        "second".to_owned(),
+    )
+    .await;
+}
+
 /// Checks scalar miss, immortal and zero-TTL writes, invalid TTL rejection,
 /// removal, and zero-value-safe hit semantics.
 ///
