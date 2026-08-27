@@ -1,14 +1,34 @@
 [workspace]
+# Don't increment the minor version for every feature commit
 features_always_increment_minor = false
+
+# Don't release on every commit
 release_always = false
+
+# Only include commits that are tagged with "release"
+release_commits = "^(feat|fix|perf|docs?|refactor)[(:]"
+
+# Label release PRs for easy identification
+# https://release-plz.dev/docs/config#the-pr_labels-field
 pr_labels = ["release"]
+
+# Don't update the changelog for every commit
 changelog_update = false
 
-[changelog]
+# Protect breaking commits from being released
+# https://release-plz.dev/docs/config#the-protect_breaking_commits-field
 protect_breaking_commits = true
+
+# Sort commits by newest first
+# https://release-plz.dev/docs/config#the-sort_commits-field
 sort_commits = "newest"
+
+# Trim the changelog to only include the most recent commits
+# https://release-plz.dev/docs/config#the-trim-field
 trim = true
 
+# Parse commits and group them into categories
+# https://release-plz.dev/docs/config#the-commit_parsers-field
 commit_parsers = [
     { message = "^feat", group = "Added" },
     { message = "^fix", group = "Fixed" },
@@ -22,6 +42,8 @@ commit_parsers = [
     { body = ".*[dD]eprecat.*", group = "Deprecated" },
 ]
 
+# Parse links in commit messages
+# https://release-plz.dev/docs/config#the-link_parsers-field
 link_parsers = [
     { pattern = "[fF]ixes #(\\d+)", text = "fixes [#${1}]", href = "{{ remote.link }}/issues/$1" },
     { pattern = "[cC]loses #(\\d+)", text = "closes [#${1}]", href = "{{ remote.link }}/issues/$1" },
