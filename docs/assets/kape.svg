@@ -14,6 +14,14 @@
       <stop offset="0" stop-color="#32c8ff"/>
       <stop offset="1" stop-color="#1689d8"/>
     </linearGradient>
+    <linearGradient id="refill-left" x1="64" y1="0" x2="428" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a32"/>
+      <stop offset="1" stop-color="#28baff"/>
+    </linearGradient>
+    <linearGradient id="refill-right" x1="428" y1="0" x2="792" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#28baff"/>
+      <stop offset="1" stop-color="#e5eef5"/>
+    </linearGradient>
     <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
       <path d="M64 0H0V64" fill="none" stroke="#154066" stroke-opacity=".24"/>
       <circle cx="0" cy="0" r="2" fill="#1c5889" fill-opacity=".34"/>
@@ -76,7 +84,7 @@
       <rect x="42" y="31" width="44" height="44" rx="5" fill="none" stroke="#ff8a32" stroke-width="7"/>
       <path d="M49 20v11M64 20v11M79 20v11M49 75v12M64 75v12M79 75v12M31 38h11M31 53h11M31 68h11M86 38h11M86 53h11M86 68h11" stroke="#ff8a32" stroke-width="6"/>
     </g>
-    <text x="64" y="143" text-anchor="middle" fill="#ff8a32" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">MEMORY</text>
+    <text x="64" y="174" text-anchor="middle" fill="#ff8a32" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">MEMORY</text>
 
     <path d="M151 56H340" fill="none" stroke="#ff8a32" stroke-width="5" marker-end="url(#arrow-orange)"/>
 
@@ -84,7 +92,7 @@
       <rect width="128" height="112" rx="22" fill="#091a2c" stroke="#28baff" stroke-width="4"/>
       <path d="m64 25 34 18-34 18-34-18ZM30 57l34 18 34-18M30 72l34 18 34-18" fill="none" stroke="#28baff" stroke-linecap="round" stroke-linejoin="round" stroke-width="7"/>
     </g>
-    <text x="428" y="143" text-anchor="middle" fill="#28baff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">REDIS</text>
+    <text x="428" y="174" text-anchor="middle" fill="#28baff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">REDIS</text>
 
     <path d="M515 56H704" fill="none" stroke="#28baff" stroke-width="5" marker-end="url(#arrow-blue)"/>
 
@@ -93,9 +101,13 @@
       <ellipse cx="64" cy="34" rx="29" ry="13" fill="none" stroke="#e5eef5" stroke-width="6"/>
       <path d="M35 34v43c0 8 13 14 29 14s29-6 29-14V34M35 55c0 8 13 14 29 14s29-6 29-14" fill="none" stroke="#e5eef5" stroke-width="6"/>
     </g>
-    <text x="792" y="143" text-anchor="middle" fill="#e5eef5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">POSTGRESQL</text>
+    <text x="792" y="174" text-anchor="middle" fill="#e5eef5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23" font-weight="700" letter-spacing="2">POSTGRESQL</text>
 
     <!-- Reverse refill path -->
-    <path d="M792 165H64" fill="none" stroke="#b8d7ea" stroke-dasharray="5 11" stroke-linecap="round" stroke-width="4" marker-end="url(#arrow-orange)" opacity=".9"/>
+    <path d="M792 106v32H428" fill="none" stroke="url(#refill-right)" stroke-dasharray="5 11" stroke-linecap="round" stroke-width="4" opacity=".95"/>
+    <path d="M428 138H64" fill="none" stroke="url(#refill-left)" stroke-dasharray="5 11" stroke-linecap="round" stroke-width="4" opacity=".95"/>
+    <!-- Explicit refill arrows match the solid arrows in the social preview. -->
+    <path d="m64 118-9 11h6v9h6v-9h6Z" fill="#ff8a32"/>
+    <path d="m420 138 8-7v4h14v6h-14v4Z" fill="#28baff"/>
   </g>
 </svg>

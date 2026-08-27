@@ -3,33 +3,13 @@ use std::time::Duration;
 
 use kape::CacheBackend;
 use kape_memory::MemoryBackend;
-use kape_testkit::{
-    assert_backend_contract, assert_batch_contract, assert_clear_contract, assert_expiring_contract,
-};
+use kape_testkit::assert_adapter_contract;
 use tokio::time::sleep;
 
 #[tokio::test]
 async fn satisfies_backend_contract() {
     let backend = MemoryBackend::<String, String>::new(100);
-    assert_backend_contract(&backend, &"contract".to_owned(), String::new()).await;
-    assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 50).await;
-    assert_batch_contract(
-        &backend,
-        &"batch-first".to_owned(),
-        &"batch-second".to_owned(),
-        &"batch-missing".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
-    assert_clear_contract(
-        &backend,
-        &"clear-first".to_owned(),
-        &"clear-second".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
+    assert_adapter_contract(&backend, 50).await;
 }
 
 #[tokio::test]

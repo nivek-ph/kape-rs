@@ -2,9 +2,7 @@ use std::{fmt, sync::Arc};
 
 use kape::{Cache, CacheBackend, KapeError, Operation};
 use kape_postgres::{PostgresBackend, PostgresBackendError, PostgresCodec};
-use kape_testkit::{
-    assert_backend_contract, assert_batch_contract, assert_clear_contract, assert_expiring_contract,
-};
+use kape_testkit::assert_adapter_contract;
 
 #[derive(Debug)]
 struct CodecError;
@@ -74,17 +72,7 @@ async fn satisfies_backend_contract() {
         .with_table("kape_text_contract_entries")
         .unwrap()
         .namespace(namespace);
-    assert_backend_contract(&backend, &"round-trip".to_owned(), String::new()).await;
-    assert_expiring_contract(&backend, &"ttl".to_owned(), "value".to_owned(), 1_000).await;
-    assert_batch_contract(
-        &backend,
-        &"batch-first".to_owned(),
-        &"batch-second".to_owned(),
-        &"batch-missing".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
+    assert_adapter_contract(&backend, 1_000).await;
 
     let codec_cache = Cache::builder()
         .backend(
@@ -147,14 +135,6 @@ async fn satisfies_backend_contract() {
         Some(PostgresBackendError::TtlOverflow)
     ));
 
-    assert_clear_contract(
-        &backend,
-        &"clear-first".to_owned(),
-        &"clear-second".to_owned(),
-        "first".to_owned(),
-        "second".to_owned(),
-    )
-    .await;
     protected.clear().await.unwrap();
     pool.close().await;
 }
